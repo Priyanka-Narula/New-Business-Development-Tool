@@ -1,0 +1,106 @@
+countries:
+  United Arab Emirates:
+    aliases: ["United Arab Emirates", "UAE", "الإمارات", "الإمارات العربية المتحدة"]
+    regions:
+      Dubai:
+        aliases: ["Dubai", "دبي"]
+        cities:
+          Dubai: ["Dubai", "دبي"]
+      Abu Dhabi:
+        aliases: ["Abu Dhabi", "أبو ظبي", "أبوظبي"]
+        cities:
+          Abu Dhabi: ["Abu Dhabi", "أبو ظبي", "أبوظبي"]
+          Al Ain: ["Al Ain", "العين"]
+      Sharjah:
+        aliases: ["Sharjah", "الشارقة"]
+        cities:
+          Sharjah: ["Sharjah", "الشارقة"]
+      Ajman:
+        aliases: ["Ajman", "عجمان"]
+        cities:
+          Ajman: ["Ajman", "عجمان"]
+      Umm Al Quwain:
+        aliases: ["Umm Al Quwain", "أم القيوين"]
+        cities:
+          Umm Al Quwain: ["Umm Al Quwain", "أم القيوين"]
+      Ras Al Khaimah:
+        aliases: ["Ras Al Khaimah", "RAK", "رأس الخيمة"]
+        cities:
+          Ras Al Khaimah: ["Ras Al Khaimah", "رأس الخيمة"]
+      Fujairah:
+        aliases: ["Fujairah", "الفجيرة"]
+        cities:
+          Fujairah: ["Fujairah", "الفجيرة"]
+
+  Saudi Arabia:
+    aliases: ["Saudi Arabia", "KSA", "السعودية", "المملكة العربية السعودية"]
+    regions:
+      Riyadh:
+        aliases: ["Riyadh Region", "منطقة الرياض"]
+        cities:
+          Riyadh: ["Riyadh", "الرياض"]
+      Makkah:
+        aliases: ["Makkah Region", "Mecca Region", "منطقة مكة المكرمة"]
+        cities:
+          Jeddah: ["Jeddah", "جدة"]
+          Makkah: ["Makkah", "Mecca", "مكة", "مكة المكرمة"]
+      Eastern Province:
+        aliases: ["Eastern Province", "Eastern Region", "المنطقة الشرقية"]
+        cities:
+          Dammam: ["Dammam", "الدمام"]
+          Khobar: ["Khobar", "Al Khobar", "الخبر"]
+          Dhahran: ["Dhahran", "الظهران"]
+      Madinah:
+        aliases: ["Madinah Region", "Medina Region", "منطقة المدينة المنورة"]
+        cities:
+          Madinah: ["Madinah", "Medina", "المدينة المنورة"]
+      Al Qassim:
+        aliases: ["Al Qassim", "Qassim", "منطقة القصيم"]
+        cities:
+          Buraydah: ["Buraydah", "Buraidah", "بريدة"]
+      Asir:
+        aliases: ["Asir", "Aseer", "منطقة عسير"]
+        cities:
+          Abha: ["Abha", "أبها"]
+      Tabuk:
+        aliases: ["Tabuk Region", "منطقة تبوك"]
+        cities:
+          Tabuk: ["Tabuk", "تبوك"]
+          NEOM: ["NEOM", "نيوم"]
+      Hail:
+        aliases: ["Hail Region", "منطقة حائل"]
+        cities:
+          Hail: ["Hail", "حائل"]
+      Northern Borders:
+        aliases: ["Northern Borders", "منطقة الحدود الشمالية"]
+        cities:
+          Arar: ["Arar", "عرعر"]
+      Jazan:
+        aliases: ["Jazan", "Jizan", "منطقة جازان"]
+        cities:
+          Jazan: ["Jazan", "Jizan", "جازان"]
+      Najran:
+        aliases: ["Najran Region", "منطقة نجران"]
+        cities:
+          Najran: ["Najran", "نجران"]
+      Al Bahah:
+        aliases: ["Al Bahah", "Al Baha", "منطقة الباحة"]
+        cities:
+          Al Bahah: ["Al Bahah", "Al Baha", "الباحة"]
+      Al Jawf:
+        aliases: ["Al Jawf", "Al Jouf", "منطقة الجوف"]
+        cities:
+          Sakaka: ["Sakaka", "سكاكا"]
+
+  Qatar:
+    aliases: ["Qatar", "قطر"]
+    regions: {}
+  Bahrain:
+    aliases: ["Bahrain", "البحرين"]
+    regions: {}
+  Oman:
+    aliases: ["Oman", "عمان"]
+    regions: {}
+  Kuwait:
+    aliases: ["Kuwait", "الكويت"]
+    regions: {}

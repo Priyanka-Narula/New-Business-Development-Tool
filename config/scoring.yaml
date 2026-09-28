@@ -1,0 +1,46 @@
+signals:
+  closed_after_missing_scans: 2
+  acceleration_min_percent: 50
+  acceleration_min_jobs: 3
+  slowdown_min_percent: 40
+  repeated_vacancy_days: 30
+
+weights:
+  hiring_activity: 25
+  industry_opportunity: 20
+  seniority_match: 15
+  company_potential: 10
+  aambridge_fit: 15
+  external_agency_potential: 10
+  decision_maker_accessibility: 5
+
+priority:
+  high_min_score: 75
+  medium_min_score: 50
+  high_min_hiring_activity: 60
+  high_min_seniority_match: 50
+  high_min_agency_potential: 40
+  require_decision_maker_for_high: true
+
+entity_resolution:
+  fuzzy_auto_accept: 92
+  fuzzy_review: 80
+
+aambridge_capabilities:
+  industries:
+    - retail
+    - healthcare
+    - pharma_life_sciences
+    - real_estate
+    - construction_infrastructure
+    - banking_financial_services
+    - hospitality_tourism
+  functions:
+    - hr_talent
+    - finance
+    - operations
+    - clinical
+    - engineering
+    - project_management
+    - hospitality_ops
+    - retail_ops

@@ -1,0 +1,38 @@
+experience_levels:
+  internship: "1"
+  entry: "2"
+  associate: "3"
+  mid_senior: "4"
+  director: "5"
+  executive: "6"
+
+nationality_restriction_phrases:
+  - "UAE nationals only"
+  - "UAE national"
+  - "Emirati"
+  - "Emiratisation"
+  - "Emiratization"
+  - "Saudi nationals only"
+  - "Saudi national"
+  - "سعودي"
+  - "سعوديين"
+  - "مواطن"
+  - "مواطنين"
+  - "للمواطنين فقط"
+
+agency_terms:
+  - "recruitment"
+  - "staffing"
+  - "executive search"
+  - "manpower"
+  - "talent solutions"
+  - "recruitment consultants"
+
+end_client_phrases:
+  - "our client"
+  - "on behalf of"
+  - "for a leading"
+  - "a leading"
+  - "a leading company"
+  - "a leading organisation"
+  - "a leading organization"

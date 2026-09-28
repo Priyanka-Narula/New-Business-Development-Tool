@@ -1,0 +1,24 @@
+# PILOT PLACEHOLDERS ONLY.
+# Replace each score from documented market research before management use.
+# `source_note` and `as_of` must be updated with every research revision.
+markets:
+  United Arab Emirates:
+    healthcare: {score: 85, source_note: "PLACEHOLDER - validate with UAE market research", as_of: "2026-09-22"}
+    pharma_life_sciences: {score: 75, source_note: "PLACEHOLDER", as_of: "2026-09-22"}
+    banking_financial_services: {score: 90, source_note: "PLACEHOLDER", as_of: "2026-09-22"}
+    real_estate: {score: 88, source_note: "PLACEHOLDER", as_of: "2026-09-22"}
+    construction_infrastructure: {score: 85, source_note: "PLACEHOLDER", as_of: "2026-09-22"}
+    renewable_energy: {score: 78, source_note: "PLACEHOLDER", as_of: "2026-09-22"}
+    retail: {score: 82, source_note: "PLACEHOLDER", as_of: "2026-09-22"}
+    hospitality_tourism: {score: 84, source_note: "PLACEHOLDER", as_of: "2026-09-22"}
+    other: {score: 40, source_note: "PLACEHOLDER", as_of: "2026-09-22"}
+  Saudi Arabia:
+    healthcare: {score: 92, source_note: "PLACEHOLDER - validate with KSA market research", as_of: "2026-09-22"}
+    pharma_life_sciences: {score: 80, source_note: "PLACEHOLDER", as_of: "2026-09-22"}
+    banking_financial_services: {score: 82, source_note: "PLACEHOLDER", as_of: "2026-09-22"}
+    real_estate: {score: 90, source_note: "PLACEHOLDER", as_of: "2026-09-22"}
+    construction_infrastructure: {score: 95, source_note: "PLACEHOLDER", as_of: "2026-09-22"}
+    renewable_energy: {score: 90, source_note: "PLACEHOLDER", as_of: "2026-09-22"}
+    retail: {score: 86, source_note: "PLACEHOLDER", as_of: "2026-09-22"}
+    hospitality_tourism: {score: 93, source_note: "PLACEHOLDER", as_of: "2026-09-22"}
+    other: {score: 40, source_note: "PLACEHOLDER", as_of: "2026-09-22"}

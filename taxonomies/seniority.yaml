@@ -1,0 +1,14 @@
+levels:
+  intern: {order: 0, target: false, keywords: [intern, internship, متدرب]}
+  entry: {order: 1, target: false, keywords: [entry level, graduate, fresher, مبتدئ]}
+  junior: {order: 2, target: false, keywords: [junior, assistant, coordinator]}
+  upper_junior: {order: 3, target: true, keywords: [senior executive, senior officer, supervisor]}
+  specialist: {order: 4, target: true, keywords: [specialist, أخصائي]}
+  functional_expert: {order: 5, target: true, keywords: [functional expert, subject matter expert, advisor]}
+  manager: {order: 6, target: true, keywords: [manager, مدير]}
+  senior_manager: {order: 7, target: true, keywords: [senior manager, general manager]}
+  department_head: {order: 8, target: true, keywords: [department head, head of, رئيس]}
+  director: {order: 9, target: true, keywords: [director]}
+  vp: {order: 10, target: true, keywords: [vice president, VP]}
+  c_level: {order: 11, target: true, keywords: [chief executive, chief officer, CEO, CFO, COO, CHRO]}
+  unknown: {order: 99, target: false, keywords: []}

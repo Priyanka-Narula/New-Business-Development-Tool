@@ -1,0 +1,16 @@
+beautifulsoup4==4.14.2
+pandas==2.3.3
+psycopg[binary]==3.2.10
+pydantic==2.11.7
+pydantic-settings==2.10.1
+pytest==8.4.1
+python-dateutil==2.9.0.post0
+python-dotenv==1.2.3
+PyYAML==6.0.2
+rapidfuzz==3.14.0
+requests==2.34.2
+selenium==4.49.0
+SQLAlchemy==2.0.43
+soupsieve==2.9.2
+streamlit==1.49.1
+tqdm==4.70.1

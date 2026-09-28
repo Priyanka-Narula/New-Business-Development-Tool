@@ -1,0 +1,82 @@
+linkedin_jobs:
+  cards:
+    - "li.jobs-search-results__list-item"
+    - "li.scaffold-layout__list-item"
+    - "div.job-card-container"
+    - "li[data-occludable-job-id]"
+    - "div[data-view-name='job-card']"
+  title:
+    - "a.job-card-list__title--link"
+    - "a.job-card-container__link"
+    - ".job-card-list__title"
+    - "a[href*='/jobs/view/'] strong"
+    - "a[href*='/jobs/view/']"
+  company_name:
+    - ".artdeco-entity-lockup__subtitle"
+    - ".job-card-container__primary-description"
+    - ".job-card-container__company-name"
+  company_link:
+    - "a[href*='/company/']"
+  location:
+    - ".artdeco-entity-lockup__caption"
+    - ".job-card-container__metadata-item"
+    - ".job-card-container__metadata-wrapper"
+  job_link:
+    - "a[href*='/jobs/view/']"
+  posted_time:
+    - "time[datetime]"
+    - "time"
+    - ".job-card-container__listed-time"
+    - ".job-card-list__footer-wrapper time"
+  metadata:
+    - ".job-card-container__metadata-wrapper"
+    - ".job-card-container__footer-wrapper"
+    - ".job-card-list__footer-wrapper"
+  result_count:
+    - ".jobs-search-results-list__subtitle"
+    - ".jobs-search-results-list__title-heading"
+    - "main"
+  description:
+    - ".jobs-description-content__text"
+    - ".jobs-box__html-content"
+    - "#job-details"
+  criteria_items:
+    - ".jobs-unified-top-card__job-insight"
+    - ".jobs-description-details__list-item"
+    - ".jobs-box__group"
+
+linkedin_posts:
+  cards:
+    - "div[role='listitem']"
+    - "li.reusable-search__result-container"
+    - "div.feed-shared-update-v2"
+    - "div.occludable-update"
+    - "[data-urn*='urn:li:']"
+    - "[data-chameleon-result-urn]"
+    - "article"
+  author_name:
+    - ".update-components-actor__name"
+    - ".feed-shared-actor__name"
+    - ".entity-result__title-text"
+  post_text:
+    - ".update-components-text"
+    - ".feed-shared-update-v2__description"
+    - ".break-words"
+    - ".entity-result__summary"
+  author_link:
+    - ".update-components-actor__container-link"
+    - ".feed-shared-actor__container-link"
+    - "a[href*='/company/']"
+    - "a[href*='/in/']"
+  author_headline:
+    - ".update-components-actor__description"
+    - ".feed-shared-actor__description"
+    - ".entity-result__primary-subtitle"
+  posted_time:
+    - "time[datetime]"
+    - "time"
+    - ".update-components-actor__sub-description"
+    - ".feed-shared-actor__sub-description"
+  post_link:
+    - "a[href*='/feed/update/urn:li:']"
+    - "a[href*='/posts/']"

@@ -1,0 +1,72 @@
+# Priority order for people who typically control external recruitment
+# partnerships. Rank 1 is most relevant to AAMBRIDGE outreach.
+designations:
+  - key: chro
+    rank: 1
+    label: CHRO
+    aliases: [CHRO, Chief Human Resources Officer]
+  - key: chief_people_officer
+    rank: 2
+    label: Chief People Officer
+    aliases: [Chief People Officer, CPO]
+  - key: vp_hr
+    rank: 3
+    label: VP HR
+    aliases: [VP HR, Vice President Human Resources, VP Human Resources]
+  - key: vp_talent_acquisition
+    rank: 4
+    label: VP Talent Acquisition
+    aliases:
+      - VP Talent Acquisition
+      - Vice President Talent Acquisition
+      - VP TA
+  - key: head_of_ta
+    rank: 5
+    label: Head of Talent Acquisition
+    aliases: [Head of Talent Acquisition, Head of TA, Head TA]
+  - key: head_of_recruitment
+    rank: 6
+    label: Head of Recruitment
+    aliases: [Head of Recruitment, Head of Recruiting]
+  - key: director_ta
+    rank: 7
+    label: Director Talent Acquisition
+    aliases:
+      - Director TA
+      - Director Talent Acquisition
+      - Director HR
+      - Director Recruitment
+      - Director of Talent Acquisition
+      - Director of HR
+      - Director of Recruitment
+  - key: ta_manager
+    rank: 8
+    label: Talent Acquisition Manager
+    aliases: [TA Manager, Talent Acquisition Manager, Manager Talent Acquisition]
+  - key: recruitment_manager
+    rank: 9
+    label: Recruitment Manager
+    aliases: [Recruitment Manager, Recruiting Manager]
+  - key: hr_manager
+    rank: 10
+    label: HR Manager
+    aliases: [HR Manager, Human Resources Manager]
+  - key: staffing_manager
+    rank: 11
+    label: Staffing Manager
+    aliases: [Staffing Manager]
+  - key: talent_partner
+    rank: 12
+    label: Talent Partner
+    aliases: [Talent Partner, HR Business Partner, HRBP]
+  - key: vendor_management_manager
+    rank: 13
+    label: Vendor Management Manager
+    aliases:
+      - Vendor Management Manager
+      - Vendor Manager
+      - RPO Manager
+      - Agency Manager
+
+default_task: "Find: Head of Talent Acquisition or equivalent"
+unmatched_rank: 99

@@ -1,0 +1,53 @@
+# Secrets and local config
+.env
+.env.*
+!.env.example
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Tests and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Runtime output
+logs/
+output/
+debug_dumps/
+*.log
+
+# Browser profiles used by Selenium
+chrome_profile/
+browser_profile/
+browser_profiles/
+
+# OS and editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo

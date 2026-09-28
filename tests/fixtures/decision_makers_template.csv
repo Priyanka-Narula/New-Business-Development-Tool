@@ -1,0 +1,2 @@
+company_id,company_name,name,designation,department,profile_url,source,verified_by,confidence,notes
+,Example Hospital,Aisha Rahman,Head of Talent Acquisition,Talent,https://www.linkedin.com/in/example,manual,recruiter,0.9,Confirmed at careers fair

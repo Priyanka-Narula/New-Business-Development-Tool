@@ -1,0 +1,6 @@
+source,text,expected_industry,expected_function,expected_seniority,expected_country,expected_city,expected_is_job_vacancy
+linkedin_job,"Healthcare Operations Manager role in Riyadh, Saudi Arabia. Minimum 5 years experience.",healthcare,operations,manager,Saudi Arabia,Riyadh,True
+linkedin_job,"Junior Store Coordinator vacancy in Dubai, UAE.",retail,retail_ops,junior,United Arab Emirates,Dubai,True
+linkedin_post,"We are expanding with a new hospital in Riyadh.",healthcare,clinical,unknown,Saudi Arabia,Riyadh,False
+linkedin_job,"Director of Engineering for a construction project in Abu Dhabi.",construction_infrastructure,engineering,director,United Arab Emirates,Abu Dhabi,True
+linkedin_post,"Regional headquarters announced for Dubai with new leadership appointments.",professional_services,executive,department_head,United Arab Emirates,Dubai,False
