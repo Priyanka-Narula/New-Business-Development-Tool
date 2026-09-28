@@ -398,12 +398,13 @@ by its weight, then summed and rounded.
   `clean` do not import pandas. The Streamlit dashboard still needs
   pyarrow; unblock the DLL or use `--no-dashboard`.
 
-See `docs\DATA_DICTIONARY.md` and `docs\FINAL_REPORT.md`.
+See `docs\DATA_DICTIONARY.md`.
 
 ## Notes
 
 - LinkedIn changes its HTML regularly. If results stop parsing, card selectors
-  in `linkedin_posts_scraper.py` or `linkedin_jobs_scraper.py` may need updates.
+  in `config\selectors.yaml` and the adapters under `aambridge\sources\` may
+  need updates.
 - Collection does not discard cards for junior seniority, missing location
   terms, or apparent sector mismatch. Location and seniority helpers add hints
   only; later extraction and scoring stages classify the stored evidence.
@@ -535,8 +536,8 @@ python -m aambridge changes
 Optional CSV-only extraction (writes `*_extracted.csv` next to the input):
 
 ```powershell
-python ollama_data_cleaning.py output\linkedin_me_jobs.csv
-python ollama_data_cleaning.py output\linkedin_me_posts.csv
+python -m aambridge clean output\linkedin_me_jobs.csv
+python -m aambridge clean output\linkedin_me_posts.csv
 ```
 
 ### 8. Decision-makers (manual, no emails or phones)
@@ -587,8 +588,7 @@ python -m pytest tests -q
 ```
 
 All tests are fixture-only (no live LinkedIn, no Ollama). Read
-`docs\DATA_DICTIONARY.md` for every table/column and `docs\FINAL_REPORT.md`
-for risks and next steps.
+`docs\DATA_DICTIONARY.md` for every table and column.
 
 Local artefacts:
 

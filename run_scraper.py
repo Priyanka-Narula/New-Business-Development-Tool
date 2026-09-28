@@ -22,8 +22,8 @@ from config import (
     build_search_specs,
     normalize_sectors,
 )
-from linkedin_jobs_scraper import experience_level_choices, scrape_jobs
-from linkedin_posts_scraper import scrape_posts
+from aambridge.sources.linkedin_jobs import experience_level_choices, scrape_jobs
+from aambridge.sources.linkedin_posts import scrape_posts
 from scraper_common import automatic_login, create_driver, manual_login
 
 ROOT = Path(__file__).resolve().parent

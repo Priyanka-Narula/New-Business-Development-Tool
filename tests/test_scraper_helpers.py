@@ -7,8 +7,8 @@ from dataclasses import dataclass
 import pandas as pd
 
 from config import SearchSpec
-from linkedin_jobs_scraper import _parse_card as parse_job_card
-from linkedin_posts_scraper import _parse_card as parse_post_card
+from aambridge.sources.linkedin_jobs import _parse_card as parse_job_card
+from aambridge.sources.linkedin_posts import _parse_card as parse_post_card
 from scraper_common import (
     _first_element,
     _is_authenticated_page,
