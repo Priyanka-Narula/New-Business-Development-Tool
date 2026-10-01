@@ -32,8 +32,10 @@ volumes low and do not use the output for unsolicited bulk messaging.
 - A LinkedIn account
 - Optional: [Ollama](https://ollama.com/) running on this machine for extraction
 
-The default stack is entirely local: a project `.venv`, SQLite file
-`aambridge.db`, logs under `logs\`, and Ollama at `http://localhost:11434`.
+The default local stack is a project `.venv`, SQLite file `aambridge.db`,
+logs under `logs\`, and Ollama at `http://localhost:11434`. The shared team
+database is Neon Postgres (**Aambridge Analytics**); set `DATABASE_URL` in
+`.env` to use it.
 
 ## Setup
 
@@ -49,8 +51,28 @@ Copy-Item .env.example .env
 ```
 
 Edit `.env` locally if you want automatic form filling. Leave either credential
-blank to use manual login. Leave `DATABASE_URL` unset to use local SQLite.
+blank to use manual login. Set `DATABASE_URL` to the Neon pooled connection
+string to share data with the team; leave it unset to use local SQLite.
 Runtime logs are written to the console and rotating files under `logs/`.
+
+## Shared Neon database
+
+Team machines should all point at the **Aambridge Analytics** Neon project.
+
+1. In the Neon console, open **Aambridge Analytics** → **Connect**.
+2. Copy the **pooled** URL (hostname contains `-pooler`, usually
+   `sslmode=require`).
+3. Put it in this folder's `.env` as `DATABASE_URL=...`. Never commit `.env`.
+4. Create tables, then optionally copy an existing local SQLite file:
+
+```powershell
+python -m aambridge init-db
+python -m aambridge migrate-sqlite --source aambridge.db
+```
+
+Use `--replace` only if you intend to wipe Neon and reload from SQLite.
+Only one scrape should run at a time against the shared database. Tests still
+use temporary SQLite files and do not need Neon.
 
 If activation is blocked, call the venv Python directly:
 
@@ -109,8 +131,8 @@ Both sources, all six sectors, KSA and UAE, past week:
 ```
 
 `run_scraper.py` remains supported for existing scripts. Scraped records are
-committed incrementally to `aambridge.db` by default. Set `DATABASE_URL` in
-`.env` to use another SQLite file or PostgreSQL.
+committed incrementally. Set `DATABASE_URL` in `.env` to the shared Neon
+database (or another SQLite file). Leave it unset to use local `aambridge.db`.
 
 Examples:
 
@@ -330,6 +352,9 @@ Open `http://localhost:8501`. Pages:
 - **What changed** — new companies, score movements, new signals
 - **Executive summary** — totals, new prospects, accelerating companies, top
   industries/cities, decision-makers identified
+- **Market potential** — region-by-industry and country-by-city charts. Scores
+  skip company potential, external-agency potential, and decision-maker
+  accessibility, then rescale the other factor weights to 100
 
 Saved views include UAE + Riyadh and the Emiratisation list (mainland UAE,
 50+ staff, nationality-restricted roles). Agencies are hidden by default.
@@ -360,7 +385,8 @@ Outreach status values: `new`, `researching`, `contacted`, `meeting`,
 | `run-all` | Scrape (optional) then clean → resolve → signals → score |
 | `run_pipeline.py` | Auto scrape (if DB empty) then clean → score → export CSVs → dashboard |
 | `init-db` | Create missing tables |
-| `reset-db --yes` | Drop and recreate the local database |
+| `migrate-sqlite` | Copy a local SQLite file into `DATABASE_URL` |
+| `reset-db --yes` | Drop and recreate the configured database |
 
 ## How to add a taxonomy entry
 
@@ -462,8 +488,8 @@ python -m pytest tests -q
 
 Edit `.env` in this folder if you want automatic LinkedIn login. Leave
 `LINKEDIN_EMAIL` / `LINKEDIN_PASSWORD` blank for manual login. Do not set
-`DATABASE_URL` unless you want a different local file or local PostgreSQL;
-the default is `aambridge.db` in this folder. Keep
+`DATABASE_URL` unless you are using the shared Neon database or a different
+local file; the default is `aambridge.db` in this folder. Keep
 `OLLAMA_URL=http://localhost:11434/api/chat`.
 
 ### 5. Start local Ollama (extraction only)
@@ -594,7 +620,7 @@ Local artefacts:
 
 | Path | What it is |
 | --- | --- |
-| `aambridge.db` | SQLite database (jobs, posts, companies, scores) |
+| `aambridge.db` | Local SQLite fallback (jobs, posts, companies, scores) |
 | `logs\aambridge.log` | Rotating runtime log |
 | `output\linkedin_me_jobs.csv` | Jobs export |
 | `output\linkedin_me_posts.csv` | Posts export |

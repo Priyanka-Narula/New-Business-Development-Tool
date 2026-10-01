@@ -33,6 +33,40 @@ def _database_parser(command: str, description: str) -> argparse.ArgumentParser:
     return parser
 
 
+def _run_migrate_sqlite(argv: Sequence[str]) -> int:
+    from aambridge.db.migrate import migrate_sqlite
+    from aambridge.settings import PROJECT_ROOT
+
+    parser = _database_parser(
+        "migrate-sqlite",
+        "Copy a local SQLite file into DATABASE_URL (Neon or other Postgres).",
+    )
+    parser.add_argument(
+        "--source",
+        type=Path,
+        default=PROJECT_ROOT / "aambridge.db",
+        help="Local SQLite file to copy. Default: aambridge.db in this folder.",
+    )
+    parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="Drop destination tables and reload if they already have rows.",
+    )
+    args = parser.parse_args(argv)
+    settings = _settings(args.database_url)
+    configure_logging(settings)
+    engine = create_database_engine(settings.database_url)
+    counts = migrate_sqlite(args.source, engine, replace=args.replace)
+    copied = sum(counts.values())
+    log.info(
+        "Copied %s rows from %s across %s tables.",
+        copied,
+        args.source,
+        len(counts),
+    )
+    return 0
+
+
 def _run_database_command(command: str, argv: Sequence[str]) -> int:
     if command == "init-db":
         parser = _database_parser(command, "Create missing database tables.")
@@ -439,6 +473,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_export_top50(arguments[1:])
     if arguments and arguments[0] == "run-all":
         return _run_all(arguments[1:])
+    if arguments and arguments[0] == "migrate-sqlite":
+        return _run_migrate_sqlite(arguments[1:])
 
     parser = argparse.ArgumentParser(prog="python -m aambridge")
     parser.add_argument(
@@ -463,6 +499,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "run-all",
             "init-db",
             "reset-db",
+            "migrate-sqlite",
             "export-csv",
         ),
     )

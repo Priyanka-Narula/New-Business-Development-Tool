@@ -17,8 +17,22 @@ def create_database_engine(database_url: str, *, echo: bool = False) -> Engine:
     """Create an engine for SQLite or a PostgreSQL-compatible URL."""
 
     url = make_url(database_url)
-    if url.drivername == "postgresql":
+    if url.drivername in {"postgresql", "postgres"}:
         url = url.set(drivername="postgresql+psycopg")
+    if url.get_backend_name() == "postgresql":
+        query = dict(url.query)
+        if "sslmode" not in query:
+            query["sslmode"] = "require"
+            url = url.set(query=query)
+        return create_engine(
+            url,
+            echo=echo,
+            future=True,
+            pool_pre_ping=True,
+            pool_recycle=300,
+            pool_size=3,
+            max_overflow=2,
+        )
     connect_args = {"check_same_thread": False} if url.get_backend_name() == "sqlite" else {}
     return create_engine(
         url,

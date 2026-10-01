@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -22,6 +22,7 @@ from aambridge.db.models import (
     Signal,
     SourceRecord,
 )
+from aambridge.extract.taxonomies import load_yaml
 from aambridge.privacy import privacy_safe, redact_personal_contacts
 from aambridge.signals.detect import _scan_ids, _seniority, what_changed
 
@@ -49,6 +50,13 @@ TABLE_COLUMNS = (
 )
 UAE_NAMES = {"united arab emirates", "uae"}
 PRIORITY_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+GRAPH_EXCLUDED_FACTORS = frozenset(
+    {
+        "company_potential",
+        "external_agency_potential",
+        "decision_maker_accessibility",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -157,6 +165,26 @@ def _factor_score(score: LeadScore, name: str) -> float:
     return float(payload.get("score_0_100") or 0)
 
 
+def graph_potential(factor_results: dict[str, Any] | None) -> int:
+    """0-100 score from kept factors, with their weights rescaled to 100."""
+
+    weights = load_yaml("config/scoring.yaml")["weights"]
+    kept = {
+        name: float(weight)
+        for name, weight in weights.items()
+        if name not in GRAPH_EXCLUDED_FACTORS
+    }
+    total_weight = sum(kept.values())
+    if not total_weight:
+        return 0
+    factors = factor_results or {}
+    weighted = 0.0
+    for name, weight in kept.items():
+        payload = factors.get(name) or {}
+        weighted += float(payload.get("score_0_100") or 0) * weight
+    return round(weighted / total_weight)
+
+
 def _pipeline_row(
     session: Session,
     company: Company,
@@ -185,6 +213,7 @@ def _pipeline_row(
         "key_contact": contact.name if contact else "",
         "designation": contact.designation if contact else "",
         "lead_score": score.total_score,
+        "graph_potential": graph_potential(score.factor_results_json),
         "status": company.outreach_status or "new",
         "last_updated": score.created_at.isoformat() if score.created_at else "",
         "size_band": company.size_band or "",
@@ -403,6 +432,67 @@ def company_detail(
             "key_contact": contact.name if contact else "",
             "designation": contact.designation if contact else "",
         }
+
+
+def _average_score(scores: list[int]) -> int:
+    return round(sum(scores) / len(scores)) if scores else 0
+
+
+def potential_breakdown(
+    session_factory: sessionmaker[Session],
+    filters: PipelineFilters | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    chosen = filters or PipelineFilters(hide_agencies=True)
+    rows = pipeline_rows(session_factory, chosen)
+    by_region_industry: dict[tuple[str, str], list[int]] = defaultdict(list)
+    by_country_city: dict[tuple[str, str], list[int]] = defaultdict(list)
+    for row in rows:
+        score = int(row["graph_potential"])
+        region = str(row.get("region") or "")
+        industry = str(row.get("industry") or "")
+        if region and industry:
+            by_region_industry[(region, industry)].append(score)
+        country = str(row.get("country") or "")
+        city = str(row.get("city") or "")
+        if country and city:
+            by_country_city[(country, city)].append(score)
+
+    region_industry = [
+        {
+            "region": region,
+            "industry": industry,
+            "avg_score": _average_score(scores),
+            "company_count": len(scores),
+        }
+        for (region, industry), scores in by_region_industry.items()
+    ]
+    region_industry.sort(
+        key=lambda item: (-item["avg_score"], item["region"], item["industry"])
+    )
+    country_city = [
+        {
+            "country": country,
+            "city": city,
+            "avg_score": _average_score(scores),
+            "company_count": len(scores),
+        }
+        for (country, city), scores in by_country_city.items()
+    ]
+    country_city.sort(
+        key=lambda item: (item["country"], -item["avg_score"], item["city"])
+    )
+    top_city_by_country: list[dict[str, Any]] = []
+    seen_countries: set[str] = set()
+    for item in country_city:
+        if item["country"] in seen_countries:
+            continue
+        seen_countries.add(item["country"])
+        top_city_by_country.append(item)
+    return {
+        "by_region_industry": region_industry,
+        "by_country_city": country_city,
+        "top_city_by_country": top_city_by_country,
+    }
 
 
 def executive_summary(

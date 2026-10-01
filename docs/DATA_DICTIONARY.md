@@ -1,6 +1,7 @@
 # AAMBRIDGE data dictionary
 
-Local SQLite default: `aambridge.db`. Personal emails and phone numbers are
+Default store is local SQLite (`aambridge.db`). Set `DATABASE_URL` to use the
+shared Neon Postgres database. Personal emails and phone numbers are
 not stored in any column.
 
 ## scan_run

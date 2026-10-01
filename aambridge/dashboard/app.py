@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import html
+from collections import defaultdict
 from collections.abc import Sequence
 
 import streamlit as st
 
 from aambridge.dashboard.queries import (
+    GRAPH_EXCLUDED_FACTORS,
     OUTREACH_STATUSES,
     PipelineFilters,
     company_detail,
@@ -15,6 +18,7 @@ from aambridge.dashboard.queries import (
     export_top50_csv,
     filter_options,
     pipeline_rows,
+    potential_breakdown,
     set_outreach_status,
 )
 from aambridge.db.session import (
@@ -237,6 +241,130 @@ def _changes_page(sessions) -> None:
         st.caption("No signals on the latest completed scan.")
 
 
+PAGES = (
+    "Pipeline",
+    "Why this company",
+    "What changed",
+    "Executive summary",
+    "Market potential",
+)
+
+
+def _bar_chart(
+    rows: list[dict],
+    *,
+    category: str,
+    facet: str,
+    facet_title: str,
+) -> None:
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for row in rows:
+        grouped[str(row[facet])].append(row)
+    facet_order = sorted(
+        grouped,
+        key=lambda name: (
+            -max(int(item["avg_score"]) for item in grouped[name]),
+            name,
+        ),
+    )
+    sections: list[str] = []
+    for facet_value in facet_order:
+        items = sorted(
+            grouped[facet_value],
+            key=lambda item: (-int(item["avg_score"]), str(item[category])),
+        )
+        bars: list[str] = []
+        for item in items:
+            score = max(0, min(100, int(item["avg_score"])))
+            tooltip = (
+                f"{item[facet]} / {item[category]}: "
+                f"{item['avg_score']}/100 average potential, "
+                f"{item['company_count']} companies"
+            )
+            bars.append(
+                "<div class='aam-bar-row' title='"
+                + html.escape(tooltip, quote=True)
+                + "'><div class='aam-bar-label'>"
+                + html.escape(str(item[category]))
+                + "</div><div class='aam-bar-track'><div class='aam-bar-fill' "
+                + f"style='width:{score}%;'></div></div>"
+                + f"<div class='aam-bar-score'>{score}</div></div>"
+            )
+        sections.append(
+            "<div class='aam-facet'><div class='aam-facet-title'>"
+            + html.escape(facet_title)
+            + ": "
+            + html.escape(facet_value)
+            + "</div>"
+            + "".join(bars)
+            + "</div>"
+        )
+    st.markdown(
+        """
+<style>
+.aam-chart { font-family: sans-serif; font-size: 0.9rem; }
+.aam-facet { margin: 0 0 1.25rem 0; }
+.aam-facet-title { font-weight: 600; margin-bottom: 0.4rem; }
+.aam-bar-row { display: flex; align-items: center; gap: 0.6rem; margin: 0.25rem 0; }
+.aam-bar-label { width: 12rem; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aam-bar-track { flex: 1; height: 1rem; background: #e6eaf1; border-radius: 4px; overflow: hidden; }
+.aam-bar-fill { height: 100%; background: #3b6fd8; }
+.aam-bar-score { width: 2.2rem; text-align: right; font-variant-numeric: tabular-nums; }
+</style>
+"""
+        + "<div class='aam-chart'>"
+        + "".join(sections)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _potential_page(sessions, filters: PipelineFilters) -> None:
+    st.title("Market potential")
+    excluded = ", ".join(
+        name.replace("_", " ") for name in sorted(GRAPH_EXCLUDED_FACTORS)
+    )
+    st.caption(
+        "Charts ignore "
+        + excluded
+        + " and rescale the remaining factor weights to 100. "
+        "Sidebar filters apply. Companies without a region, industry, country, "
+        "or city are left out of the matching chart."
+    )
+    breakdown = potential_breakdown(sessions, filters)
+    st.subheader("Industry potential by region")
+    region_rows = breakdown["by_region_industry"]
+    if region_rows:
+        _bar_chart(
+            region_rows,
+            category="industry",
+            facet="region",
+            facet_title="Region",
+        )
+    else:
+        st.info("No region and industry pairs match the current filters.")
+
+    st.subheader("City potential by country")
+    city_rows = breakdown["by_country_city"]
+    if city_rows:
+        _bar_chart(
+            city_rows,
+            category="city",
+            facet="country",
+            facet_title="Country",
+        )
+        for item in sorted(
+            breakdown["top_city_by_country"],
+            key=lambda row: (-int(row["avg_score"]), str(row["country"])),
+        ):
+            st.caption(
+                f"Highest potential in {item['country']}: {item['city']} "
+                f"({item['avg_score']}/100, {item['company_count']} companies)"
+            )
+    else:
+        st.info("No country and city pairs match the current filters.")
+
+
 def _summary_page(sessions) -> None:
     st.title("Executive summary")
     summary = executive_summary(sessions)
@@ -263,15 +391,9 @@ def main() -> None:
         st.session_state["page"] = "Pipeline"
     page = st.sidebar.radio(
         "Page",
-        ("Pipeline", "Why this company", "What changed", "Executive summary"),
-        index=(
-            "Pipeline",
-            "Why this company",
-            "What changed",
-            "Executive summary",
-        ).index(st.session_state["page"])
-        if st.session_state["page"]
-        in {"Pipeline", "Why this company", "What changed", "Executive summary"}
+        PAGES,
+        index=PAGES.index(st.session_state["page"])
+        if st.session_state["page"] in PAGES
         else 0,
     )
     st.session_state["page"] = page
@@ -283,6 +405,8 @@ def main() -> None:
         _company_page(sessions)
     elif page == "What changed":
         _changes_page(sessions)
+    elif page == "Market potential":
+        _potential_page(sessions, filters)
     else:
         _summary_page(sessions)
 

@@ -3,13 +3,16 @@ from __future__ import annotations
 from sqlalchemy import inspect, select
 
 from aambridge.dashboard.queries import (
+    GRAPH_EXCLUDED_FACTORS,
     TABLE_COLUMNS,
     PipelineFilters,
     company_detail,
     executive_summary,
     export_top50_csv,
     export_top50_rows,
+    graph_potential,
     pipeline_rows,
+    potential_breakdown,
     set_outreach_status,
 )
 from aambridge.db.models import Company, LeadScore
@@ -21,6 +24,7 @@ from aambridge.db.session import (
 from aambridge.db.storage import ScanStore
 from aambridge.decision_makers import add_decision_maker
 from aambridge.extract.service import process_database
+from aambridge.extract.taxonomies import load_yaml
 from aambridge.resolve.companies import resolve_all
 from aambridge.scoring.engine import score_companies
 from aambridge.signals.detect import detect_signals
@@ -181,3 +185,35 @@ def test_end_to_end_fixture_pipeline_feeds_dashboard(tmp_path) -> None:
     assert summary["totals_by_priority"]["HIGH"] + summary["totals_by_priority"][
         "MEDIUM"
     ] + summary["totals_by_priority"]["LOW"] == 1
+
+    breakdown = potential_breakdown(sessions)
+    assert breakdown["by_region_industry"] == [
+        {
+            "region": "Dubai",
+            "industry": "healthcare",
+            "avg_score": rows[0]["graph_potential"],
+            "company_count": 1,
+        }
+    ]
+    assert breakdown["by_country_city"] == [
+        {
+            "country": "United Arab Emirates",
+            "city": "Dubai",
+            "avg_score": rows[0]["graph_potential"],
+            "company_count": 1,
+        }
+    ]
+    assert breakdown["top_city_by_country"][0]["city"] == "Dubai"
+
+
+def test_graph_potential_rescales_kept_weights_to_100() -> None:
+    weights = load_yaml("config/scoring.yaml")["weights"]
+    kept = {
+        name: {"score_0_100": 100}
+        for name in weights
+        if name not in GRAPH_EXCLUDED_FACTORS
+    }
+    ignored = {name: {"score_0_100": 0} for name in GRAPH_EXCLUDED_FACTORS}
+    assert graph_potential({**kept, **ignored}) == 100
+    assert graph_potential({**kept, **{name: {"score_0_100": 100} for name in GRAPH_EXCLUDED_FACTORS}}) == 100
+    assert graph_potential({name: {"score_0_100": 0} for name in kept} | ignored) == 0

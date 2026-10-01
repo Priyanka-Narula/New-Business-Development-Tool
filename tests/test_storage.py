@@ -328,8 +328,20 @@ def test_reset_recreates_schema_and_postgresql_url_is_supported(tmp_path) -> Non
     )
     try:
         assert postgres.dialect.name == "postgresql"
+        assert postgres.url.drivername == "postgresql+psycopg"
+        assert postgres.url.query.get("sslmode") == "require"
     finally:
         postgres.dispose()
+
+    neon = create_database_engine(
+        "postgresql://user:password@ep-demo-pooler.region.aws.neon.tech/neondb"
+        "?sslmode=require&channel_binding=require"
+    )
+    try:
+        assert neon.url.query.get("sslmode") == "require"
+        assert neon.url.query.get("channel_binding") == "require"
+    finally:
+        neon.dispose()
 
 
 def test_keyboard_interrupt_keeps_parsed_rows(monkeypatch, tmp_path) -> None:
@@ -410,4 +422,39 @@ def test_failed_scan_keeps_saved_rows_and_marks_run_failed(
         assert run.finished_at is not None
         assert session.scalar(select(func.count()).select_from(Post)) == 1
         assert session.scalar(select(func.count()).select_from(SourceRecord)) == 1
+
+
+def test_migrate_sqlite_copies_rows_and_refuses_overwrite(tmp_path) -> None:
+    from aambridge.db.migrate import migrate_sqlite
+
+    source_path = tmp_path / "source.db"
+    dest_path = tmp_path / "dest.db"
+    source_engine = create_database_engine(f"sqlite:///{source_path.as_posix()}")
+    initialise_database(source_engine)
+    with create_session_factory(source_engine).begin() as session:
+        session.add(
+            ScanRun(
+                started_at=datetime.now(UTC),
+                finished_at=datetime.now(UTC),
+                mode="jobs",
+                args_json={"mode": "jobs"},
+                status="completed",
+                stats_json={"jobs": 1},
+            )
+        )
+
+    dest_engine = create_database_engine(f"sqlite:///{dest_path.as_posix()}")
+    counts = migrate_sqlite(source_path, dest_engine)
+    assert counts["scan_run"] == 1
+    with create_session_factory(dest_engine)() as session:
+        run = session.scalar(select(ScanRun))
+        assert run is not None
+        assert run.id == 1
+        assert run.mode == "jobs"
+        assert run.args_json == {"mode": "jobs"}
+
+    with pytest.raises(RuntimeError, match="already has rows"):
+        migrate_sqlite(source_path, dest_engine)
+
+    assert migrate_sqlite(source_path, dest_engine, replace=True)["scan_run"] == 1
 
