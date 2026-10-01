@@ -6,11 +6,12 @@ import csv
 import io
 import re
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import or_, select
+from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from aambridge.db.models import (
     Company,
@@ -114,19 +115,51 @@ def _mode(values: list[str]) -> str:
 
 
 def _contact(session: Session, company_id: int) -> DecisionMaker | None:
-    return session.scalar(
+    return _contacts_by_company(session, (company_id,)).get(company_id)
+
+
+def _contacts_by_company(
+    session: Session,
+    company_ids: Sequence[int],
+) -> dict[int, DecisionMaker]:
+    found: dict[int, DecisionMaker] = {}
+    if not company_ids:
+        return found
+    for item in session.scalars(
         select(DecisionMaker)
         .where(
-            DecisionMaker.company_id == company_id,
+            DecisionMaker.company_id.in_(company_ids),
             DecisionMaker.verified_at.is_not(None),
         )
         .order_by(DecisionMaker.relevance_rank, DecisionMaker.id)
-    )
+    ):
+        found.setdefault(item.company_id, item)
+    return found
+
+
+def _jobs_by_company(
+    session: Session,
+    company_ids: Sequence[int],
+) -> dict[int, list[Job]]:
+    grouped: dict[int, list[Job]] = defaultdict(list)
+    if not company_ids:
+        return grouped
+    for job in session.scalars(
+        select(Job)
+        .where(Job.company_id.in_(company_ids))
+        .options(selectinload(Job.observations))
+    ):
+        grouped[job.company_id].append(job)
+    return grouped
 
 
 def _job_summary(session: Session, company_id: int) -> _JobSummary:
+    return _job_summary_from_jobs(_jobs_by_company(session, (company_id,)).get(company_id, []))
+
+
+def _job_summary_from_jobs(jobs: Sequence[Job]) -> _JobSummary:
     summary = _JobSummary()
-    for job in session.scalars(select(Job).where(Job.company_id == company_id)):
+    for job in jobs:
         raw = {}
         if job.observations:
             latest = max(job.observations, key=lambda item: item.observed_at)
@@ -186,12 +219,11 @@ def graph_potential(factor_results: dict[str, Any] | None) -> int:
 
 
 def _pipeline_row(
-    session: Session,
     company: Company,
     score: LeadScore,
     jobs: _JobSummary,
+    contact: DecisionMaker | None,
 ) -> dict[str, Any]:
-    contact = _contact(session, company.id)
     country = company.hq_country or _mode(jobs.countries)
     city = _mode(jobs.cities)
     activity = _factor_score(score, "hiring_activity")
@@ -272,16 +304,31 @@ def pipeline_rows(
         scan_id = _latest_scan(session)
         if scan_id is None:
             return []
+        scores = list(
+            session.scalars(select(LeadScore).where(LeadScore.scan_run_id == scan_id))
+        )
+        company_ids = [score.company_id for score in scores]
+        companies = {
+            company.id: company
+            for company in session.scalars(
+                select(Company).where(Company.id.in_(company_ids))
+            )
+        } if company_ids else {}
+        jobs_by_company = _jobs_by_company(session, company_ids)
+        contacts = _contacts_by_company(session, company_ids)
         rows: list[dict[str, Any]] = []
-        for score in session.scalars(
-            select(LeadScore).where(LeadScore.scan_run_id == scan_id)
-        ):
-            company = session.get(Company, score.company_id)
+        for score in scores:
+            company = companies.get(score.company_id)
             if company is None:
                 continue
-            row = _pipeline_row(session, company, score, _job_summary(session, company.id))
-            if _matches(row, chosen):
-                rows.append(row)
+            rows.append(
+                _pipeline_row(
+                    company,
+                    score,
+                    _job_summary_from_jobs(jobs_by_company.get(company.id, [])),
+                    contacts.get(company.id),
+                )
+            )
         rows.sort(
             key=lambda item: (
                 PRIORITY_ORDER.get(item["priority"], 9),
@@ -289,13 +336,21 @@ def pipeline_rows(
                 item["company"],
             )
         )
-        if chosen.limit is not None:
-            return rows[: chosen.limit]
-        return rows
+        return apply_pipeline_filters(rows, chosen)
 
 
-def filter_options(session_factory: sessionmaker[Session]) -> dict[str, list[str]]:
-    rows = pipeline_rows(session_factory, PipelineFilters(hide_agencies=False))
+def apply_pipeline_filters(
+    rows: list[dict[str, Any]],
+    filters: PipelineFilters | None = None,
+) -> list[dict[str, Any]]:
+    chosen = filters or PipelineFilters()
+    matched = [row for row in rows if _matches(row, chosen)]
+    if chosen.limit is not None:
+        return matched[: chosen.limit]
+    return matched
+
+
+def filter_options_from_rows(rows: list[dict[str, Any]]) -> dict[str, list[str]]:
     def unique(key: str) -> list[str]:
         return sorted({str(row[key]) for row in rows if row.get(key)})
 
@@ -314,6 +369,12 @@ def filter_options(session_factory: sessionmaker[Session]) -> dict[str, list[str
     }
 
 
+def filter_options(session_factory: sessionmaker[Session]) -> dict[str, list[str]]:
+    return filter_options_from_rows(
+        pipeline_rows(session_factory, PipelineFilters(hide_agencies=False))
+    )
+
+
 def set_outreach_status(
     session_factory: sessionmaker[Session],
     company_id: int,
@@ -326,6 +387,78 @@ def set_outreach_status(
         if company is None:
             raise ValueError(f"Company {company_id} not found")
         company.outreach_status = status
+
+
+def _evidence_payload(item: Evidence, source: SourceRecord) -> dict[str, Any]:
+    return {
+        "quoted_text": redact_personal_contacts(item.quoted_text),
+        "source_url": source.source_url or item.source_url,
+        "observed_at": item.observed_at.isoformat() if item.observed_at else "",
+        "basis": item.basis.upper(),
+    }
+
+
+def _evidence_by_company(
+    session: Session,
+    company_ids: Sequence[int],
+) -> dict[int, list[dict[str, Any]]]:
+    grouped: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    if not company_ids:
+        return grouped
+    jobs = list(session.scalars(select(Job).where(Job.company_id.in_(company_ids))))
+    posts = list(session.scalars(select(Post).where(Post.company_id.in_(company_ids))))
+    signals = list(session.scalars(select(Signal).where(Signal.company_id.in_(company_ids))))
+    job_company = {job.source_key: job.company_id for job in jobs}
+    post_company = {post.source_key: post.company_id for post in posts}
+    signal_company = {signal.id: signal.company_id for signal in signals}
+    source_keys = set(job_company) | set(post_company)
+    sources: dict[int, SourceRecord] = {}
+    if source_keys:
+        sources = {
+            source.id: source
+            for source in session.scalars(
+                select(SourceRecord).where(SourceRecord.source_key.in_(source_keys))
+            )
+        }
+    conditions = []
+    if signal_company:
+        conditions.append(Evidence.signal_id.in_(list(signal_company)))
+    if sources:
+        conditions.append(Evidence.source_record_id.in_(list(sources)))
+    if not conditions:
+        return grouped
+    items = list(
+        session.scalars(
+            select(Evidence).where(or_(*conditions)).order_by(Evidence.observed_at)
+        )
+    )
+    missing = {
+        item.source_record_id for item in items if item.source_record_id not in sources
+    }
+    if missing:
+        sources.update(
+            {
+                source.id: source
+                for source in session.scalars(
+                    select(SourceRecord).where(SourceRecord.id.in_(missing))
+                )
+            }
+        )
+    for item in items:
+        source = sources.get(item.source_record_id)
+        if source is None:
+            continue
+        company_id = None
+        if item.signal_id is not None:
+            company_id = signal_company.get(item.signal_id)
+        if company_id is None and source.source == "linkedin_job":
+            company_id = job_company.get(source.source_key)
+        if company_id is None and source.source == "linkedin_post":
+            company_id = post_company.get(source.source_key)
+        if company_id is None:
+            continue
+        grouped[company_id].append(_evidence_payload(item, source))
+    return grouped
 
 
 def company_detail(
@@ -359,35 +492,7 @@ def company_detail(
                 .order_by(Signal.created_at)
             )
         ]
-        evidence = []
-        for item in session.scalars(select(Evidence).order_by(Evidence.observed_at)):
-            source = session.get(SourceRecord, item.source_record_id)
-            if source is None:
-                continue
-            linked = False
-            if item.signal_id is not None:
-                signal = session.get(Signal, item.signal_id)
-                linked = signal is not None and signal.company_id == company_id
-            if not linked and source.source == "linkedin_job":
-                job = session.scalar(
-                    select(Job).where(Job.source_key == source.source_key)
-                )
-                linked = job is not None and job.company_id == company_id
-            if not linked and source.source == "linkedin_post":
-                post = session.scalar(
-                    select(Post).where(Post.source_key == source.source_key)
-                )
-                linked = post is not None and post.company_id == company_id
-            if not linked:
-                continue
-            evidence.append(
-                {
-                    "quoted_text": redact_personal_contacts(item.quoted_text),
-                    "source_url": source.source_url or item.source_url,
-                    "observed_at": item.observed_at.isoformat() if item.observed_at else "",
-                    "basis": item.basis.upper(),
-                }
-            )
+        evidence = _evidence_by_company(session, (company_id,)).get(company_id, [])
         missing = list((latest.explanation_json or {}).get("missing_inputs", [])) if latest else []
         factors = []
         if latest:
@@ -438,12 +543,9 @@ def _average_score(scores: list[int]) -> int:
     return round(sum(scores) / len(scores)) if scores else 0
 
 
-def potential_breakdown(
-    session_factory: sessionmaker[Session],
-    filters: PipelineFilters | None = None,
+def potential_from_rows(
+    rows: list[dict[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
-    chosen = filters or PipelineFilters(hide_agencies=True)
-    rows = pipeline_rows(session_factory, chosen)
     by_region_industry: dict[tuple[str, str], list[int]] = defaultdict(list)
     by_country_city: dict[tuple[str, str], list[int]] = defaultdict(list)
     for row in rows:
@@ -495,6 +597,14 @@ def potential_breakdown(
     }
 
 
+def potential_breakdown(
+    session_factory: sessionmaker[Session],
+    filters: PipelineFilters | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    chosen = filters or PipelineFilters(hide_agencies=True)
+    return potential_from_rows(pipeline_rows(session_factory, chosen))
+
+
 def executive_summary(
     session_factory: sessionmaker[Session],
 ) -> dict[str, Any]:
@@ -510,13 +620,13 @@ def executive_summary(
                 )
             )
         )
-        accelerating = {
-            company.canonical_name
-            for signal in session.scalars(
-                select(Signal).where(Signal.signal_type == "hiring_acceleration")
+        accelerating = set(
+            session.scalars(
+                select(Company.canonical_name)
+                .join(Signal, Signal.company_id == Company.id)
+                .where(Signal.signal_type == "hiring_acceleration")
             )
-            if (company := session.get(Company, signal.company_id)) is not None
-        }
+        )
     return {
         "totals_by_priority": {
             name: sum(1 for row in rows if row["priority"] == name)
@@ -556,12 +666,16 @@ def export_top50_rows(
             preset=chosen.preset,
             limit=50,
         )
+    rows = pipeline_rows(session_factory, chosen)
+    with session_factory() as session:
+        evidence_map = _evidence_by_company(
+            session, [row["company_id"] for row in rows]
+        )
     exported: list[dict[str, str]] = []
-    for row in pipeline_rows(session_factory, chosen):
-        detail = company_detail(session_factory, row["company_id"]) or {}
+    for row in rows:
         evidence = "; ".join(
             f"{item['basis']} {item['quoted_text'][:120]}"
-            for item in detail.get("evidence") or []
+            for item in evidence_map.get(row["company_id"], [])
         )
         exported.append(
             privacy_safe(

@@ -13,12 +13,13 @@ from aambridge.dashboard.queries import (
     GRAPH_EXCLUDED_FACTORS,
     OUTREACH_STATUSES,
     PipelineFilters,
+    apply_pipeline_filters,
     company_detail,
     executive_summary,
     export_top50_csv,
-    filter_options,
+    filter_options_from_rows,
     pipeline_rows,
-    potential_breakdown,
+    potential_from_rows,
     set_outreach_status,
 )
 from aambridge.db.session import (
@@ -40,8 +41,16 @@ def _database_url() -> str:
 @st.cache_resource
 def _sessions(database_url: str):
     engine = create_database_engine(database_url)
-    initialise_database(engine)
+    initialise_database(engine, scrub_personal_contacts=False)
     return create_session_factory(engine)
+
+
+@st.cache_data(ttl=180, show_spinner="Loading companies from Neon...")
+def _scored_rows(database_url: str) -> list[dict]:
+    return pipeline_rows(
+        _sessions(database_url),
+        PipelineFilters(hide_agencies=False),
+    )
 
 
 def _cell(value: object) -> str:
@@ -112,9 +121,8 @@ def _filters(options: dict[str, list[str]]) -> PipelineFilters:
     )
 
 
-def _pipeline_page(sessions, filters: PipelineFilters) -> None:
+def _pipeline_page(sessions, filters: PipelineFilters, rows: list[dict]) -> None:
     st.title("Companies to approach first")
-    rows = pipeline_rows(sessions, filters)
     display = [
         {
             "Priority": row["priority"],
@@ -138,13 +146,15 @@ def _pipeline_page(sessions, filters: PipelineFilters) -> None:
     else:
         st.info("No scored companies match the current filters.")
 
-    csv_text = export_top50_csv(sessions, filters=filters)
-    st.download_button(
-        "Export Top 50 CSV",
-        data=csv_text,
-        file_name="aambridge_top50.csv",
-        mime="text/csv",
-    )
+    if st.button("Prepare Top 50 CSV"):
+        st.session_state["top50_csv"] = export_top50_csv(sessions, filters=filters)
+    if st.session_state.get("top50_csv"):
+        st.download_button(
+            "Download Top 50 CSV",
+            data=st.session_state["top50_csv"],
+            file_name="aambridge_top50.csv",
+            mime="text/csv",
+        )
     names = {row["company"]: row["company_id"] for row in rows}
     if names:
         selected = st.selectbox("Open company", list(names))
@@ -179,6 +189,7 @@ def _company_page(sessions) -> None:
     )
     if status != detail["outreach_status"]:
         set_outreach_status(sessions, company_id, status)
+        _scored_rows.clear()
         st.success(f"Saved outreach status: {status}")
 
     st.markdown("### Score breakdown")
@@ -319,7 +330,7 @@ def _bar_chart(
     )
 
 
-def _potential_page(sessions, filters: PipelineFilters) -> None:
+def _potential_page(rows: list[dict], filters: PipelineFilters) -> None:
     st.title("Market potential")
     excluded = ", ".join(
         name.replace("_", " ") for name in sorted(GRAPH_EXCLUDED_FACTORS)
@@ -331,7 +342,7 @@ def _potential_page(sessions, filters: PipelineFilters) -> None:
         "Sidebar filters apply. Companies without a region, industry, country, "
         "or city are left out of the matching chart."
     )
-    breakdown = potential_breakdown(sessions, filters)
+    breakdown = potential_from_rows(rows)
     st.subheader("Industry potential by region")
     region_rows = breakdown["by_region_industry"]
     if region_rows:
@@ -387,6 +398,7 @@ def _summary_page(sessions) -> None:
 def main() -> None:
     st.set_page_config(page_title="AAMBRIDGE pipeline", layout="wide")
     sessions = _sessions(_database_url())
+    scored = _scored_rows(_database_url())
     if "page" not in st.session_state:
         st.session_state["page"] = "Pipeline"
     page = st.sidebar.radio(
@@ -397,16 +409,17 @@ def main() -> None:
         else 0,
     )
     st.session_state["page"] = page
-    options = filter_options(sessions)
+    options = filter_options_from_rows(scored)
     filters = _filters(options)
+    rows = apply_pipeline_filters(scored, filters)
     if page == "Pipeline":
-        _pipeline_page(sessions, filters)
+        _pipeline_page(sessions, filters, rows)
     elif page == "Why this company":
         _company_page(sessions)
     elif page == "What changed":
         _changes_page(sessions)
     elif page == "Market potential":
-        _potential_page(sessions, filters)
+        _potential_page(rows, filters)
     else:
         _summary_page(sessions)
 

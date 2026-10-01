@@ -49,12 +49,17 @@ def create_session_factory(engine: Engine) -> sessionmaker[Session]:
     return sessionmaker(bind=engine, expire_on_commit=False)
 
 
-def initialise_database(engine: Engine) -> None:
+def initialise_database(
+    engine: Engine,
+    *,
+    scrub_personal_contacts: bool = True,
+) -> None:
     """Create all missing pilot tables without deleting data."""
 
     Base.metadata.create_all(engine)
     _apply_pilot_additive_migrations(engine)
-    _scrub_existing_personal_contacts(engine)
+    if scrub_personal_contacts:
+        _scrub_existing_personal_contacts(engine)
 
 
 def _apply_pilot_additive_migrations(engine: Engine) -> None:

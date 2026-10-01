@@ -334,8 +334,6 @@ def _run_dashboard(argv: Sequence[str]) -> int:
     args = parser.parse_args(argv)
     settings = _settings(args.database_url)
     configure_logging(settings)
-    engine = create_database_engine(settings.database_url)
-    initialise_database(engine)
     app = Path(__file__).resolve().parent / "dashboard" / "app.py"
     command = [
         sys.executable,

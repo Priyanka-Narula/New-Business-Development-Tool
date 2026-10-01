@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import delete, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from aambridge.db.models import (
     Company,
@@ -455,9 +455,10 @@ def what_changed(
         signals = list(
             session.scalars(select(Signal).where(Signal.scan_run_id == current))
         )
+        jobs = session.scalars(select(Job).options(selectinload(Job.observations)))
         new_company_ids = {
             job.company_id
-            for job in session.scalars(select(Job))
+            for job in jobs
             if job.company_id
             and _job_observation(job, current) is not None
             and len(job.observations) == 1
@@ -486,10 +487,17 @@ def what_changed(
                 for company_id, score in current_scores.items()
                 if score != previous_scores.get(company_id, 0)
             ]
+        companies = {
+            company.id: company.canonical_name
+            for company in session.scalars(
+                select(Company).where(Company.id.in_(sorted(new_company_ids)))
+            )
+        } if new_company_ids else {}
         return {
             "new_companies": [
-                session.get(Company, company_id).canonical_name
+                companies[company_id]
                 for company_id in sorted(new_company_ids)
+                if company_id in companies
             ],
             "new_signals": [
                 {
