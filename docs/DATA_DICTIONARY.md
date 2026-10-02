@@ -38,6 +38,8 @@ not stored in any column.
 | jurisdiction | string | `mainland`, `free_zone`, or `unknown` |
 | is_agency | boolean | True when the company is a recruitment agency |
 | outreach_status | string | `new`, `researching`, `contacted`, `meeting`, `client`, or `not a fit` |
+| lead_score_percentile | float | Mid-rank percentile of the latest lead score among scored non-agency companies. Empty for agencies and unscored companies |
+| acquisition_band | string | `High`, `Medium`, or `Low` from that percentile: top third, middle third, bottom third. Empty when the percentile is empty |
 | group_id | integer | Optional foreign key to `company_group` |
 
 ## company_alias

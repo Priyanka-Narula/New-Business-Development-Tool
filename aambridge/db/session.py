@@ -86,6 +86,20 @@ def _apply_pilot_additive_migrations(engine: Engine) -> None:
                 "CREATE INDEX IF NOT EXISTS ix_company_outreach_status "
                 "ON company (outreach_status)"
             )
+    if "lead_score_percentile" not in columns:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "ALTER TABLE company ADD COLUMN lead_score_percentile FLOAT"
+            )
+    if "acquisition_band" not in columns:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "ALTER TABLE company ADD COLUMN acquisition_band VARCHAR(16)"
+            )
+            connection.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_company_acquisition_band "
+                "ON company (acquisition_band)"
+            )
 
 
 def _scrub_existing_personal_contacts(engine: Engine) -> None:

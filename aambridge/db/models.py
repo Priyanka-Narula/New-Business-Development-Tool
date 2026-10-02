@@ -59,6 +59,8 @@ class Company(Base):
     outreach_status: Mapped[str] = mapped_column(
         String(32), default="new", index=True
     )
+    lead_score_percentile: Mapped[float | None] = mapped_column(Float)
+    acquisition_band: Mapped[str | None] = mapped_column(String(16), index=True)
     group_id: Mapped[int | None] = mapped_column(ForeignKey("company_group.id"))
 
 

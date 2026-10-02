@@ -25,6 +25,7 @@ from aambridge.db.models import (
 )
 from aambridge.extract.taxonomies import load_yaml
 from aambridge.privacy import privacy_safe, redact_personal_contacts
+from aambridge.scoring.bands import market_score
 from aambridge.signals.detect import _scan_ids, _seniority, what_changed
 
 OUTREACH_STATUSES = (
@@ -50,7 +51,8 @@ TABLE_COLUMNS = (
     "last_updated",
 )
 UAE_NAMES = {"united arab emirates", "uae"}
-PRIORITY_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+BAND_ORDER = {"High": 0, "Medium": 1, "Low": 2}
+FIRST_CALL_STATUSES = frozenset({"new", "researching"})
 GRAPH_EXCLUDED_FACTORS = frozenset(
     {
         "company_potential",
@@ -75,6 +77,7 @@ class PipelineFilters:
     hide_agencies: bool = True
     preset: str | None = None
     limit: int | None = None
+    acquisition_bands: tuple[str, ...] = ()
 
 
 @dataclass
@@ -245,6 +248,8 @@ def _pipeline_row(
         "key_contact": contact.name if contact else "",
         "designation": contact.designation if contact else "",
         "lead_score": score.total_score,
+        "lead_score_percentile": company.lead_score_percentile,
+        "acquisition_band": company.acquisition_band or "",
         "graph_potential": graph_potential(score.factor_results_json),
         "status": company.outreach_status or "new",
         "last_updated": score.created_at.isoformat() if score.created_at else "",
@@ -276,6 +281,8 @@ def _matches(row: dict[str, Any], filters: PipelineFilters) -> bool:
     if filters.size_bands and row["size_band"] not in filters.size_bands:
         return False
     if filters.outreach_statuses and row["status"] not in filters.outreach_statuses:
+        return False
+    if filters.acquisition_bands and row.get("acquisition_band") not in filters.acquisition_bands:
         return False
     if filters.preset == "uae_riyadh":
         country = str(row["country"]).casefold()
@@ -331,7 +338,8 @@ def pipeline_rows(
             )
         rows.sort(
             key=lambda item: (
-                PRIORITY_ORDER.get(item["priority"], 9),
+                BAND_ORDER.get(item.get("acquisition_band") or "", 9),
+                -(float(item["lead_score_percentile"] or 0)),
                 -int(item["lead_score"]),
                 item["company"],
             )
@@ -366,6 +374,7 @@ def filter_options_from_rows(rows: list[dict[str, Any]]) -> dict[str, list[str]]
         "hiring_bands": ["high", "medium", "low"],
         "size_bands": unique("size_band"),
         "outreach_statuses": list(OUTREACH_STATUSES),
+        "acquisition_bands": ["High", "Medium", "Low"],
     }
 
 
@@ -519,6 +528,8 @@ def company_detail(
             "outreach_status": company.outreach_status or "new",
             "priority": latest.priority if latest else "",
             "lead_score": latest.total_score if latest else None,
+            "lead_score_percentile": company.lead_score_percentile,
+            "acquisition_band": company.acquisition_band or "",
             "explanation": latest.explanation_text if latest else "",
             "factors": factors,
             "missing_inputs": missing,
@@ -541,6 +552,79 @@ def company_detail(
 
 def _average_score(scores: list[int]) -> int:
     return round(sum(scores) / len(scores)) if scores else 0
+
+
+def _rank_groups(rows: list[dict[str, Any]], key: str) -> tuple[list[dict[str, Any]], int]:
+    """Rank a company slice by High/Medium/Low mix. Missing keys are excluded."""
+
+    groups: dict[str, Counter[str]] = defaultdict(Counter)
+    excluded = 0
+    for row in rows:
+        name = str(row.get(key) or "")
+        band = str(row.get("acquisition_band") or "")
+        if not name or band not in BAND_ORDER:
+            excluded += 1
+            continue
+        groups[name][band] += 1
+    ranked: list[dict[str, Any]] = []
+    for name, counts in groups.items():
+        high = counts["High"]
+        medium = counts["Medium"]
+        low = counts["Low"]
+        ranked.append(
+            {
+                key: name,
+                "market_score": market_score(high, medium, low),
+                "high": high,
+                "medium": medium,
+                "low": low,
+                "company_count": high + medium + low,
+            }
+        )
+    ranked.sort(
+        key=lambda item: (-int(item["market_score"]), -int(item["high"]), str(item[key]))
+    )
+    return ranked, excluded
+
+
+def industry_rankings(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    rankings, excluded = _rank_groups(rows, "industry")
+    return {"rankings": rankings, "excluded": excluded}
+
+
+def region_rankings(rows: list[dict[str, Any]], industry: str) -> dict[str, Any]:
+    scoped = [row for row in rows if row.get("industry") == industry]
+    rankings, excluded = _rank_groups(scoped, "region")
+    return {"rankings": rankings, "excluded": excluded, "industry": industry}
+
+
+def focus_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Where outreach time should go in the current filtered company set."""
+
+    industries = industry_rankings(rows)["rankings"]
+    first_calls = [
+        row
+        for row in rows
+        if row.get("acquisition_band") == "High"
+        and row.get("status") in FIRST_CALL_STATUSES
+    ]
+    first_calls.sort(
+        key=lambda row: (
+            -(float(row.get("lead_score_percentile") or 0)),
+            -int(row["lead_score"]),
+            row["company"],
+        )
+    )
+    totals = Counter(row.get("acquisition_band") or "" for row in rows)
+    leader = industries[0] if industries else None
+    return {
+        "high_uncontacted": len(first_calls),
+        "leading_industry": leader["industry"] if leader else "",
+        "leading_score": leader["market_score"] if leader else 0,
+        "top_industries": industries[:5],
+        "first_calls": first_calls,
+        "totals_by_band": {name: totals[name] for name in ("High", "Medium", "Low")},
+    }
 
 
 def potential_from_rows(
@@ -665,6 +749,7 @@ def export_top50_rows(
             hide_agencies=chosen.hide_agencies,
             preset=chosen.preset,
             limit=50,
+            acquisition_bands=chosen.acquisition_bands,
         )
     rows = pipeline_rows(session_factory, chosen)
     with session_factory() as session:

@@ -21,6 +21,7 @@ from aambridge.db.models import (
     SourceRecord,
 )
 from aambridge.extract.taxonomies import load_yaml, target_seniority_keys
+from aambridge.scoring.bands import assign_acquisition_bands
 from aambridge.scoring.factors import (
     CompanyScoreContext,
     FactorResult,
@@ -377,4 +378,5 @@ def score_companies(
                 for key, value in values.items():
                     setattr(existing, key, value)
             stats["scored"] += 1
+        assign_acquisition_bands(session)
     return stats

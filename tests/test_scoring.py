@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import func, select
 
-from aambridge.db.models import LeadScore
+from aambridge.db.models import Company, LeadScore
 from aambridge.db.session import (
     create_database_engine,
     create_session_factory,
@@ -11,6 +11,11 @@ from aambridge.db.session import (
 )
 from aambridge.db.storage import ScanStore
 from aambridge.resolve.companies import resolve_all
+from aambridge.scoring.bands import (
+    band_for_percentile,
+    market_score,
+    percentile_map,
+)
 from aambridge.scoring.engine import score_companies, score_context
 from aambridge.scoring.factors import CompanyScoreContext
 
@@ -203,3 +208,44 @@ def test_database_scoring_persists_explanation_and_skips_agencies(tmp_path) -> N
             "decision_maker_accessibility",
         }
         assert session.scalar(select(func.count()).select_from(LeadScore)) == 1
+        client = session.scalar(
+            select(Company).where(Company.canonical_name == "Client Hospital")
+        )
+        agency = session.scalar(
+            select(Company).where(Company.canonical_name == "Agency Recruitment")
+        )
+        assert client is not None and agency is not None
+        assert client.lead_score_percentile == 50
+        assert client.acquisition_band == "Medium"
+        assert agency.lead_score_percentile is None
+        assert agency.acquisition_band is None
+
+
+def test_percentile_tertiles_and_ties() -> None:
+    distinct = list(range(1, 10))
+    ranked = percentile_map(distinct)
+    bands = [band_for_percentile(ranked[score]) for score in distinct]
+    assert bands == [
+        "Low",
+        "Low",
+        "Low",
+        "Medium",
+        "Medium",
+        "Medium",
+        "High",
+        "High",
+        "High",
+    ]
+
+    tied = percentile_map([10, 90, 90])
+    assert [band_for_percentile(tied[score]) for score in (10, 90, 90)] == [
+        "Low",
+        "High",
+        "High",
+    ]
+
+
+def test_market_score_weights_high_companies_above_volume() -> None:
+    assert market_score(8, 4, 10) == 28
+    assert market_score(3, 20, 10) == 29
+    assert market_score(0, 0, 12) == 0

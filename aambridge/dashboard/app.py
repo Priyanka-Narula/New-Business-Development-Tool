@@ -1,25 +1,23 @@
-"""Streamlit dashboard for the ranked AAMBRIDGE company pipeline."""
+"""Streamlit dashboard for targeted AAMBRIDGE client acquisition."""
 
 from __future__ import annotations
 
 import argparse
-import html
-from collections import defaultdict
 from collections.abc import Sequence
 
 import streamlit as st
 
 from aambridge.dashboard.queries import (
-    GRAPH_EXCLUDED_FACTORS,
     OUTREACH_STATUSES,
     PipelineFilters,
     apply_pipeline_filters,
     company_detail,
-    executive_summary,
     export_top50_csv,
     filter_options_from_rows,
+    focus_snapshot,
+    industry_rankings,
     pipeline_rows,
-    potential_from_rows,
+    region_rankings,
     set_outreach_status,
 )
 from aambridge.db.session import (
@@ -27,8 +25,17 @@ from aambridge.db.session import (
     create_session_factory,
     initialise_database,
 )
+from aambridge.scoring.bands import refresh_acquisition_bands
 from aambridge.settings import Settings
 from aambridge.signals.detect import what_changed as scan_changes
+
+
+PAGES = (
+    "Where to focus",
+    "Companies",
+    "Market potential",
+    "What changed",
+)
 
 
 def _database_url() -> str:
@@ -47,8 +54,10 @@ def _sessions(database_url: str):
 
 @st.cache_data(ttl=180, show_spinner="Loading companies from Neon...")
 def _scored_rows(database_url: str) -> list[dict]:
+    sessions = _sessions(database_url)
+    refresh_acquisition_bands(sessions)
     return pipeline_rows(
-        _sessions(database_url),
+        sessions,
         PipelineFilters(hide_agencies=False),
     )
 
@@ -118,34 +127,151 @@ def _filters(options: dict[str, list[str]]) -> PipelineFilters:
         outreach_statuses=_multiselect("Outreach status", options["outreach_statuses"]),
         hide_agencies=hide_agencies,
         preset=preset_key,
+        acquisition_bands=_multiselect("Target tier", options["acquisition_bands"]),
     )
 
 
-def _pipeline_page(sessions, filters: PipelineFilters, rows: list[dict]) -> None:
-    st.title("Companies to approach first")
-    display = [
-        {
-            "Priority": row["priority"],
-            "Company": row["company"],
-            "Industry": row["industry"],
-            "Country/City": row["country_city"],
-            "Hiring Activity": row["hiring_activity_label"],
-            "Roles Hiring": row["roles_hiring"],
-            "Seniority": row["seniority"],
-            "Key Contact": row["key_contact"],
-            "Designation": row["designation"],
-            "Lead Score": row["lead_score"],
-            "Status": row["status"],
-            "Last Updated": row["last_updated"],
-        }
-        for row in rows
-    ]
-    st.caption(f"{len(display)} companies after filters. Agencies hidden by default.")
-    if display:
-        _show_table(display)
-    else:
-        st.info("No scored companies match the current filters.")
+def _chart_styles() -> None:
+    st.markdown(
+        """
+<style>
+.aam-chart { font-family: sans-serif; font-size: 0.9rem; }
+.aam-bar-row { display: flex; align-items: center; gap: 0.6rem; margin: 0.15rem 0; }
+.aam-bar-label { width: 14rem; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.aam-bar-track { flex: 1; height: 1.1rem; background: #e6eaf1; border-radius: 4px; overflow: hidden; }
+.aam-bar-fill { height: 100%; background: #3b6fd8; }
+.aam-bar-score { width: 2.6rem; text-align: right; font-variant-numeric: tabular-nums; }
+</style>
+""",
+        unsafe_allow_html=True,
+    )
 
+
+def _ranking_chart(items: list[dict], label_key: str, key_prefix: str) -> str | None:
+    """Clickable ranking. Bar length is relative to the leader in this chart."""
+
+    if not items:
+        return None
+    _chart_styles()
+    top = max(int(item["market_score"]) for item in items) or 1
+    clicked: str | None = None
+    for index, item in enumerate(items, start=1):
+        label = str(item[label_key])
+        score = int(item["market_score"])
+        width = round(100 * score / top)
+        mix = f"{item['high']} High · {item['medium']} Medium · {item['low']} Low"
+        name_col, bar_col = st.columns([2, 5])
+        if name_col.button(f"{index}. {label}", key=f"{key_prefix}-{index}-{label}"):
+            clicked = label
+        bar_col.markdown(
+            "<div class='aam-bar-row'><div class='aam-bar-track'><div class='aam-bar-fill' "
+            + f"style='width:{width}%;'></div></div>"
+            + f"<div class='aam-bar-score'>{score}</div></div>",
+            unsafe_allow_html=True,
+        )
+        st.caption(mix)
+    return clicked
+
+
+def _percentile_label(value: object) -> str:
+    if value is None or value == "":
+        return "—"
+    return f"{float(value):.0f}"
+
+
+def _company_brief(sessions, company_id: int) -> None:
+    detail = company_detail(sessions, company_id)
+    if detail is None:
+        st.error("Company not found.")
+        return
+    st.markdown(f"#### {detail['company']}")
+    st.markdown(detail["explanation"] or "No score explanation yet.")
+    columns = st.columns(4)
+    columns[0].metric("Target tier", detail["acquisition_band"] or "—")
+    columns[1].metric("Percentile", _percentile_label(detail["lead_score_percentile"]))
+    columns[2].metric(
+        "Lead score",
+        detail["lead_score"] if detail["lead_score"] is not None else "—",
+    )
+    columns[3].metric("Fit gate", detail["priority"] or "—")
+    status = st.selectbox(
+        "Outreach status",
+        OUTREACH_STATUSES,
+        index=OUTREACH_STATUSES.index(detail["outreach_status"])
+        if detail["outreach_status"] in OUTREACH_STATUSES
+        else 0,
+        key=f"outreach-{company_id}",
+    )
+    if status != detail["outreach_status"]:
+        set_outreach_status(sessions, company_id, status)
+        _scored_rows.clear()
+        st.success(f"Saved outreach status: {status}")
+        st.rerun()
+
+    st.markdown("**Why this score**")
+    if detail["missing_inputs"]:
+        st.warning("Missing inputs: " + ", ".join(detail["missing_inputs"]))
+    if not detail["factors"]:
+        st.caption("No factor breakdown stored.")
+    for factor in detail["factors"]:
+        st.markdown(
+            f"**{factor['factor'].replace('_', ' ').title()}** "
+            f"{factor['score_0_100']:.0f}/100 [{factor['basis'].upper()}]"
+        )
+        for reason in factor["reasons"]:
+            st.caption(reason)
+
+    st.markdown("**Evidence**")
+    if not detail["evidence"]:
+        st.caption("No stored evidence quotes for this company.")
+    for item in detail["evidence"]:
+        observed = (item["observed_at"] or "")[:10] or "undated"
+        st.markdown(f"- **{item['basis']}** · {observed} · {item['quoted_text']}")
+        if item["source_url"]:
+            st.caption(item["source_url"])
+
+
+def _toggle_company(company_id: int) -> None:
+    current = st.session_state.get("expanded_company_id")
+    st.session_state["expanded_company_id"] = (
+        None if current == company_id else company_id
+    )
+
+
+def _company_list(sessions, rows: list[dict], key_prefix: str) -> None:
+    if not rows:
+        st.info("No scored companies match the current filters.")
+        return
+    st.caption(
+        "Target tier · percentile · lead score · industry · region · location · "
+        "hiring · contact · outreach"
+    )
+    expanded = st.session_state.get("expanded_company_id")
+    for row in rows:
+        company_id = int(row["company_id"])
+        label = (
+            f"{row['company']}  ·  {row.get('acquisition_band') or '—'}  ·  "
+            f"{_percentile_label(row.get('lead_score_percentile'))}  ·  "
+            f"{row['lead_score']}  ·  {row['industry'] or '—'}  ·  "
+            f"{row['region'] or '—'}  ·  {row['country_city'] or '—'}  ·  "
+            f"{row['hiring_activity_label']}  ·  "
+            f"{row['key_contact'] or 'No contact'}  ·  {row['status']}"
+        )
+        if st.button(label, key=f"{key_prefix}-{company_id}"):
+            _toggle_company(company_id)
+            st.rerun()
+        if expanded == company_id:
+            _company_brief(sessions, company_id)
+
+
+def _companies_page(sessions, filters: PipelineFilters, rows: list[dict]) -> None:
+    st.title("Companies")
+    st.caption(
+        f"{len(rows)} companies after filters. "
+        "Target tier compares each company with every scored company. "
+        "Agencies stay hidden until the sidebar checkbox is cleared."
+    )
+    _company_list(sessions, rows, "companies")
     if st.button("Prepare Top 50 CSV"):
         st.session_state["top50_csv"] = export_top50_csv(sessions, filters=filters)
     if st.session_state.get("top50_csv"):
@@ -155,94 +281,158 @@ def _pipeline_page(sessions, filters: PipelineFilters, rows: list[dict]) -> None
             file_name="aambridge_top50.csv",
             mime="text/csv",
         )
-    names = {row["company"]: row["company_id"] for row in rows}
-    if names:
-        selected = st.selectbox("Open company", list(names))
-        if selected:
-            st.session_state["company_id"] = names[selected]
-        if st.button("Open why page"):
-            st.session_state["page"] = "Why this company"
-            st.rerun()
 
 
-def _company_page(sessions) -> None:
-    company_id = st.session_state.get("company_id")
-    if not company_id:
-        st.info("Choose a company from the pipeline table.")
+def _open_industry(industry: str) -> None:
+    st.session_state["nav_jump"] = "Market potential"
+    st.session_state["market_industry"] = industry
+    st.session_state["market_region"] = None
+
+
+def _focus_page(sessions, rows: list[dict]) -> None:
+    st.title("Where to focus")
+    snapshot = focus_snapshot(rows)
+    leader = snapshot["leading_industry"]
+    uncontacted = snapshot["high_uncontacted"]
+    if leader:
+        st.markdown(
+            f"**{uncontacted}** high-tier "
+            f"{'company has' if uncontacted == 1 else 'companies have'} "
+            f"not been contacted yet. **{leader}** leads the market ranking "
+            f"with a score of {snapshot['leading_score']}."
+        )
+    else:
+        st.markdown("Score a scan to see which industry and companies to approach first.")
+    totals = snapshot["totals_by_band"]
+    columns = st.columns(4)
+    columns[0].metric("Uncontacted high", uncontacted)
+    columns[1].metric("High", totals["High"])
+    columns[2].metric("Medium", totals["Medium"])
+    columns[3].metric("Low", totals["Low"])
+
+    st.subheader("Strongest industries")
+    st.caption("Score = 3 × High + 1 × Medium. Low companies are counted but do not raise the rank.")
+    clicked = _ranking_chart(snapshot["top_industries"], "industry", "focus-industry")
+    if clicked:
+        _open_industry(clicked)
+        st.rerun()
+    if not snapshot["top_industries"]:
+        st.info("No industries match the current filters.")
+
+    st.subheader("First calls")
+    st.caption("High tier, still new or being researched, strongest percentile first.")
+    if snapshot["first_calls"]:
+        _company_list(sessions, snapshot["first_calls"], "first-calls")
+    else:
+        st.info("No high-tier companies are still uncontacted.")
+
+
+def _market_page(sessions, rows: list[dict]) -> None:
+    industry = st.session_state.get("market_industry")
+    region = st.session_state.get("market_region")
+    if industry and region:
+        _region_companies_page(sessions, rows, industry, region)
         return
-    detail = company_detail(sessions, company_id)
-    if detail is None:
-        st.error("Company not found.")
+    if industry:
+        _industry_regions_page(rows, industry)
         return
-    st.title("Why is this company on my list?")
-    st.subheader(detail["company"])
-    st.markdown(detail["explanation"] or "No score explanation yet.")
-    left, right = st.columns(2)
-    left.metric("Lead score", detail["lead_score"] if detail["lead_score"] is not None else "—")
-    right.metric("Priority", detail["priority"] or "—")
-    status = st.selectbox(
-        "Outreach status",
-        OUTREACH_STATUSES,
-        index=OUTREACH_STATUSES.index(detail["outreach_status"])
-        if detail["outreach_status"] in OUTREACH_STATUSES
-        else 0,
+
+    st.title("Market potential")
+    st.caption(
+        "Industries ranked by target-tier mix: 3 × High + 1 × Medium. "
+        "Bar length is relative to the leading industry. "
+        "Sidebar filters choose which companies are counted. "
+        "They do not change who is High."
     )
-    if status != detail["outreach_status"]:
-        set_outreach_status(sessions, company_id, status)
-        _scored_rows.clear()
-        st.success(f"Saved outreach status: {status}")
-
-    st.markdown("### Score breakdown")
-    if detail["missing_inputs"]:
-        st.warning("Missing inputs: " + ", ".join(detail["missing_inputs"]))
-    for factor in detail["factors"]:
-        st.markdown(
-            f"**{factor['factor'].replace('_', ' ').title()}** "
-            f"{factor['score_0_100']:.0f}/100 [{factor['basis'].upper()}]"
+    breakdown = industry_rankings(rows)
+    if breakdown["excluded"]:
+        st.caption(
+            f"{breakdown['excluded']} companies have no industry or no target tier "
+            "and are left out of this ranking."
         )
-        st.progress(min(1.0, factor["score_0_100"] / 100))
-        for reason in factor["reasons"]:
-            st.caption(reason)
+    clicked = _ranking_chart(breakdown["rankings"], "industry", "market-industry")
+    if clicked:
+        _open_industry(clicked)
+        st.rerun()
+    if not breakdown["rankings"]:
+        st.info("No industries match the current filters.")
 
-    st.markdown("### Evidence")
-    if not detail["evidence"]:
-        st.caption("No stored evidence quotes for this company.")
-    for item in detail["evidence"]:
-        st.markdown(
-            f"- **{item['basis']}** · {item['observed_at'][:10] or 'undated'} · "
-            f"{item['quoted_text']}"
+
+def _industry_regions_page(rows: list[dict], industry: str) -> None:
+    st.title(industry)
+    if st.button("All industries"):
+        st.session_state["market_industry"] = None
+        st.session_state["market_region"] = None
+        st.rerun()
+    st.caption(
+        f"Regions in {industry}, ranked the same way: 3 × High + 1 × Medium."
+    )
+    breakdown = region_rankings(rows, industry)
+    if breakdown["excluded"]:
+        st.caption(
+            f"{breakdown['excluded']} companies in {industry} have no region "
+            "or no target tier and are left out of this ranking."
         )
-        if item["source_url"]:
-            st.caption(item["source_url"])
-
-    st.markdown("### Active jobs")
-    if detail["active_jobs"]:
-        _show_table(detail["active_jobs"])
-    else:
-        st.caption("No active jobs stored.")
-
-    st.markdown("### Signals timeline")
-    if detail["signals"]:
-        _show_table(detail["signals"])
-    else:
-        st.caption("No signals stored.")
-
-    st.markdown("### Score history")
-    if detail["score_history"]:
-        _show_table(detail["score_history"])
+    clicked = _ranking_chart(breakdown["rankings"], "region", f"market-region-{industry}")
+    if clicked:
+        st.session_state["market_region"] = clicked
+        st.rerun()
+    if not breakdown["rankings"]:
+        st.info(f"No regions in {industry} match the current filters.")
 
 
-def _changes_page(sessions) -> None:
+def _region_companies_page(
+    sessions,
+    rows: list[dict],
+    industry: str,
+    region: str,
+) -> None:
+    st.title(f"{region}")
+    st.caption(industry)
+    crumb_all, crumb_industry, _rest = st.columns([1, 1, 2])
+    if crumb_all.button("All industries"):
+        st.session_state["market_industry"] = None
+        st.session_state["market_region"] = None
+        st.rerun()
+    if crumb_industry.button(industry):
+        st.session_state["market_region"] = None
+        st.rerun()
+    scoped = [
+        row
+        for row in rows
+        if row.get("industry") == industry and row.get("region") == region
+    ]
+    scoped.sort(key=lambda row: (-int(row["lead_score"]), row["company"]))
+    st.caption(f"{len(scoped)} companies, strongest lead score first.")
+    _company_list(sessions, scoped, f"region-{industry}-{region}")
+
+
+def _changes_page(sessions, scored: list[dict]) -> None:
     st.title("What changed")
     changes = scan_changes(sessions)
+    by_id = {row["company_id"]: row for row in scored}
+    by_name = {row["company"]: row for row in scored}
     st.subheader("New companies")
-    _show_list(
-        changes.get("new_companies"),
-        empty="None since the previous completed scan.",
-    )
+    newcomers = []
+    for name in changes.get("new_companies") or []:
+        band = (by_name.get(name) or {}).get("acquisition_band") or "—"
+        newcomers.append(f"{name} · {band}")
+    _show_list(newcomers, empty="None since the previous completed scan.")
     st.subheader("Biggest score changes")
-    if changes.get("score_changes"):
-        _show_table(changes["score_changes"])
+    movements = []
+    for item in changes.get("score_changes") or []:
+        row = by_id.get(item["company_id"]) or {}
+        movements.append(
+            {
+                "Company": row.get("company") or item["company_id"],
+                "Target tier": row.get("acquisition_band") or "—",
+                "Previous": item["previous"],
+                "Current": item["current"],
+                "Change": item["change"],
+            }
+        )
+    if movements:
+        _show_table(movements)
     else:
         st.caption("Score a second completed scan to see movements.")
     st.subheader("New signals")
@@ -252,176 +442,30 @@ def _changes_page(sessions) -> None:
         st.caption("No signals on the latest completed scan.")
 
 
-PAGES = (
-    "Pipeline",
-    "Why this company",
-    "What changed",
-    "Executive summary",
-    "Market potential",
-)
-
-
-def _bar_chart(
-    rows: list[dict],
-    *,
-    category: str,
-    facet: str,
-    facet_title: str,
-) -> None:
-    grouped: dict[str, list[dict]] = defaultdict(list)
-    for row in rows:
-        grouped[str(row[facet])].append(row)
-    facet_order = sorted(
-        grouped,
-        key=lambda name: (
-            -max(int(item["avg_score"]) for item in grouped[name]),
-            name,
-        ),
-    )
-    sections: list[str] = []
-    for facet_value in facet_order:
-        items = sorted(
-            grouped[facet_value],
-            key=lambda item: (-int(item["avg_score"]), str(item[category])),
-        )
-        bars: list[str] = []
-        for item in items:
-            score = max(0, min(100, int(item["avg_score"])))
-            tooltip = (
-                f"{item[facet]} / {item[category]}: "
-                f"{item['avg_score']}/100 average potential, "
-                f"{item['company_count']} companies"
-            )
-            bars.append(
-                "<div class='aam-bar-row' title='"
-                + html.escape(tooltip, quote=True)
-                + "'><div class='aam-bar-label'>"
-                + html.escape(str(item[category]))
-                + "</div><div class='aam-bar-track'><div class='aam-bar-fill' "
-                + f"style='width:{score}%;'></div></div>"
-                + f"<div class='aam-bar-score'>{score}</div></div>"
-            )
-        sections.append(
-            "<div class='aam-facet'><div class='aam-facet-title'>"
-            + html.escape(facet_title)
-            + ": "
-            + html.escape(facet_value)
-            + "</div>"
-            + "".join(bars)
-            + "</div>"
-        )
-    st.markdown(
-        """
-<style>
-.aam-chart { font-family: sans-serif; font-size: 0.9rem; }
-.aam-facet { margin: 0 0 1.25rem 0; }
-.aam-facet-title { font-weight: 600; margin-bottom: 0.4rem; }
-.aam-bar-row { display: flex; align-items: center; gap: 0.6rem; margin: 0.25rem 0; }
-.aam-bar-label { width: 12rem; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.aam-bar-track { flex: 1; height: 1rem; background: #e6eaf1; border-radius: 4px; overflow: hidden; }
-.aam-bar-fill { height: 100%; background: #3b6fd8; }
-.aam-bar-score { width: 2.2rem; text-align: right; font-variant-numeric: tabular-nums; }
-</style>
-"""
-        + "<div class='aam-chart'>"
-        + "".join(sections)
-        + "</div>",
-        unsafe_allow_html=True,
-    )
-
-
-def _potential_page(rows: list[dict], filters: PipelineFilters) -> None:
-    st.title("Market potential")
-    excluded = ", ".join(
-        name.replace("_", " ") for name in sorted(GRAPH_EXCLUDED_FACTORS)
-    )
-    st.caption(
-        "Charts ignore "
-        + excluded
-        + " and rescale the remaining factor weights to 100. "
-        "Sidebar filters apply. Companies without a region, industry, country, "
-        "or city are left out of the matching chart."
-    )
-    breakdown = potential_from_rows(rows)
-    st.subheader("Industry potential by region")
-    region_rows = breakdown["by_region_industry"]
-    if region_rows:
-        _bar_chart(
-            region_rows,
-            category="industry",
-            facet="region",
-            facet_title="Region",
-        )
-    else:
-        st.info("No region and industry pairs match the current filters.")
-
-    st.subheader("City potential by country")
-    city_rows = breakdown["by_country_city"]
-    if city_rows:
-        _bar_chart(
-            city_rows,
-            category="city",
-            facet="country",
-            facet_title="Country",
-        )
-        for item in sorted(
-            breakdown["top_city_by_country"],
-            key=lambda row: (-int(row["avg_score"]), str(row["country"])),
-        ):
-            st.caption(
-                f"Highest potential in {item['country']}: {item['city']} "
-                f"({item['avg_score']}/100, {item['company_count']} companies)"
-            )
-    else:
-        st.info("No country and city pairs match the current filters.")
-
-
-def _summary_page(sessions) -> None:
-    st.title("Executive summary")
-    summary = executive_summary(sessions)
-    columns = st.columns(4)
-    columns[0].metric("HIGH", summary["totals_by_priority"]["HIGH"])
-    columns[1].metric("MEDIUM", summary["totals_by_priority"]["MEDIUM"])
-    columns[2].metric("LOW", summary["totals_by_priority"]["LOW"])
-    columns[3].metric("Decision-makers identified", summary["decision_makers_identified"])
-    st.markdown(f"Scored client companies: {summary['scored_companies']}")
-    st.subheader("New prospects")
-    _show_list(summary["new_prospects"])
-    st.subheader("Accelerating companies")
-    _show_list(summary["accelerating_companies"])
-    st.subheader("Top industries")
-    _show_list(summary["top_industries"])
-    st.subheader("Top cities")
-    _show_list(summary["top_cities"])
-
-
 def main() -> None:
-    st.set_page_config(page_title="AAMBRIDGE pipeline", layout="wide")
+    st.set_page_config(page_title="AAMBRIDGE acquisition", layout="wide")
     sessions = _sessions(_database_url())
     scored = _scored_rows(_database_url())
-    if "page" not in st.session_state:
-        st.session_state["page"] = "Pipeline"
-    page = st.sidebar.radio(
-        "Page",
-        PAGES,
-        index=PAGES.index(st.session_state["page"])
-        if st.session_state["page"] in PAGES
-        else 0,
-    )
-    st.session_state["page"] = page
+    if st.session_state.get("nav_page") not in PAGES:
+        st.session_state["nav_page"] = "Where to focus"
+    jump = st.session_state.pop("nav_jump", None)
+    if jump in PAGES:
+        st.session_state["nav_page"] = jump
+    page = st.sidebar.radio("Page", PAGES, key="nav_page")
+    if page != "Market potential":
+        st.session_state["market_industry"] = None
+        st.session_state["market_region"] = None
     options = filter_options_from_rows(scored)
     filters = _filters(options)
     rows = apply_pipeline_filters(scored, filters)
-    if page == "Pipeline":
-        _pipeline_page(sessions, filters, rows)
-    elif page == "Why this company":
-        _company_page(sessions)
-    elif page == "What changed":
-        _changes_page(sessions)
+    if page == "Where to focus":
+        _focus_page(sessions, rows)
+    elif page == "Companies":
+        _companies_page(sessions, filters, rows)
     elif page == "Market potential":
-        _potential_page(rows, filters)
+        _market_page(sessions, rows)
     else:
-        _summary_page(sessions)
+        _changes_page(sessions, scored)
 
 
 if __name__ == "__main__":

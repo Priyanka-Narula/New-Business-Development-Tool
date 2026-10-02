@@ -10,9 +10,12 @@ from aambridge.dashboard.queries import (
     executive_summary,
     export_top50_csv,
     export_top50_rows,
+    focus_snapshot,
     graph_potential,
+    industry_rankings,
     pipeline_rows,
     potential_breakdown,
+    region_rankings,
     set_outreach_status,
 )
 from aambridge.db.models import Company, LeadScore
@@ -121,6 +124,27 @@ def test_outreach_status_column_is_added(tmp_path) -> None:
     engine, _sessions = _database(tmp_path)
     columns = {column["name"] for column in inspect(engine).get_columns("company")}
     assert "outreach_status" in columns
+    assert "lead_score_percentile" in columns
+    assert "acquisition_band" in columns
+
+
+def test_acquisition_columns_are_added_to_existing_databases(tmp_path) -> None:
+    engine = create_database_engine(
+        f"sqlite:///{(tmp_path / 'legacy.db').as_posix()}"
+    )
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE company ("
+            "id INTEGER PRIMARY KEY, "
+            "canonical_name VARCHAR(255) NOT NULL, "
+            "is_agency BOOLEAN NOT NULL DEFAULT 0, "
+            "outreach_status VARCHAR(32) NOT NULL DEFAULT 'new'"
+            ")"
+        )
+    initialise_database(engine, scrub_personal_contacts=False)
+    columns = {column["name"] for column in inspect(engine).get_columns("company")}
+    assert "lead_score_percentile" in columns
+    assert "acquisition_band" in columns
 
 
 def test_end_to_end_fixture_pipeline_feeds_dashboard(tmp_path) -> None:
@@ -133,6 +157,8 @@ def test_end_to_end_fixture_pipeline_feeds_dashboard(tmp_path) -> None:
     assert rows[0]["designation"] == "Head of Talent Acquisition"
     assert rows[0]["status"] == "new"
     assert rows[0]["industry"] == "healthcare"
+    assert rows[0]["acquisition_band"] == "Medium"
+    assert rows[0]["lead_score_percentile"] == 50
     assert "email" not in rows[0]
     assert "phone" not in rows[0]
 
@@ -217,3 +243,43 @@ def test_graph_potential_rescales_kept_weights_to_100() -> None:
     assert graph_potential({**kept, **ignored}) == 100
     assert graph_potential({**kept, **{name: {"score_0_100": 100} for name in GRAPH_EXCLUDED_FACTORS}}) == 100
     assert graph_potential({name: {"score_0_100": 0} for name in kept} | ignored) == 0
+
+
+def _company(name: str, band: str, industry: str, region: str, score: int = 50) -> dict:
+    return {
+        "company": name,
+        "acquisition_band": band,
+        "industry": industry,
+        "region": region,
+        "lead_score": score,
+        "lead_score_percentile": score,
+        "status": "new",
+    }
+
+
+def test_industry_and_region_rankings_follow_market_score() -> None:
+    rows = [
+        *[_company(f"Bank {index}", "High", "banking", "Dubai") for index in range(8)],
+        *[_company(f"Bank mid {index}", "Medium", "banking", "Abu Dhabi") for index in range(4)],
+        *[_company(f"Bank low {index}", "Low", "banking", "Dubai", score=10) for index in range(10)],
+        *[_company(f"Retail {index}", "High", "retail", "Riyadh") for index in range(3)],
+        *[_company(f"Retail mid {index}", "Medium", "retail", "Riyadh") for index in range(20)],
+        *[_company(f"Retail low {index}", "Low", "retail", "Jeddah", score=5) for index in range(10)],
+        _company("Unplaced", "High", "", "Dubai"),
+    ]
+    industries = industry_rankings(rows)
+    assert industries["excluded"] == 1
+    assert [item["industry"] for item in industries["rankings"]] == ["retail", "banking"]
+    assert industries["rankings"][0]["market_score"] == 29
+    assert industries["rankings"][1]["market_score"] == 28
+
+    retail_regions = region_rankings(rows, "retail")
+    assert [item["region"] for item in retail_regions["rankings"]] == ["Riyadh", "Jeddah"]
+    assert retail_regions["rankings"][0]["market_score"] == 29
+    assert retail_regions["rankings"][1]["market_score"] == 0
+    assert retail_regions["excluded"] == 0
+
+    snapshot = focus_snapshot(rows)
+    assert snapshot["leading_industry"] == "retail"
+    assert snapshot["high_uncontacted"] == 12
+    assert snapshot["first_calls"][0]["acquisition_band"] == "High"
