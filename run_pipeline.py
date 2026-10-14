@@ -29,6 +29,7 @@ STAGES = (
     "RESOLVE",
     "SIGNALS",
     "SCORE",
+    "ENRICH",
     "EXPORT",
     "DASHBOARD",
 )
@@ -119,6 +120,25 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[argparse.Namespace, l
         "--no-dashboard",
         action="store_true",
         help="Export files and exit without starting Streamlit.",
+    )
+    parser.add_argument(
+        "--enrich-contacts",
+        action="store_true",
+        help=(
+            "Deprecated. Do not use. Contacts come from employer job listings "
+            "and owner-triggered Apollo, not website or LinkedIn company pages."
+        ),
+    )
+    parser.add_argument(
+        "--enrich-limit",
+        type=int,
+        default=50,
+        help="Max companies to enrich when --enrich-contacts is set.",
+    )
+    parser.add_argument(
+        "--skip-linkedin-people",
+        action="store_true",
+        help="When enriching, skip the LinkedIn People list.",
     )
     parser.add_argument("--port", type=int, default=8501)
     return parser.parse_known_args(argv)
@@ -234,11 +254,35 @@ def main(argv: Sequence[str] | None = None) -> int:
     score_stats = score_companies(sessions)
     _summarise("Scoring", score_stats)
 
+    if args.enrich_contacts:
+        from aambridge.contacts.enrich import enrich_contacts
+
+        _banner(
+            6,
+            "ENRICH",
+            module="aambridge.contacts.enrich.enrich_contacts",
+            file="aambridge/contacts/enrich.py",
+        )
+        enrich_stats = enrich_contacts(
+            sessions,
+            limit=args.enrich_limit,
+            skip_linkedin_people=args.skip_linkedin_people,
+        )
+        _summarise("Enrich contacts", enrich_stats)
+    else:
+        _banner(
+            6,
+            "ENRICH",
+            module="aambridge.contacts.enrich.enrich_contacts",
+            file="aambridge/contacts/enrich.py",
+            extra="status: skipped (pass --enrich-contacts)",
+        )
+
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     top50_path = output_dir / "aambridge_top50.csv"
     _banner(
-        6,
+        7,
         "EXPORT",
         module="aambridge.db.storage.export_csv / aambridge.dashboard.queries.export_top50_csv",
         file="aambridge/db/storage.py, aambridge/dashboard/queries.py",
@@ -259,7 +303,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     dashboard_url = f"http://localhost:{args.port}"
     if args.no_dashboard:
         _banner(
-            7,
+            8,
             "DASHBOARD",
             module="aambridge.dashboard.app",
             file="aambridge/dashboard/app.py",
@@ -267,7 +311,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     else:
         _banner(
-            7,
+            8,
             "DASHBOARD",
             module="aambridge.dashboard.app",
             file="aambridge/dashboard/app.py",

@@ -6,19 +6,20 @@ industries:
   fintech: {label: Fintech, keywords: [fintech, payments, digital banking]}
   technology_software: {label: Technology & Software, keywords: [software, technology, saas, cloud]}
   telecom: {label: Telecom, keywords: [telecom, telecommunications, mobile operator]}
-  ai_data: {label: AI & Data, keywords: [artificial intelligence, machine learning, data science, analytics]}
+  ai_data: {label: AI & Data, keywords: [artificial intelligence, machine learning, data science, analytics, LLM, MLOps, AI engineer, generative AI]}
   real_estate: {label: Real Estate, keywords: [real estate, property, facilities management]}
   construction_infrastructure: {label: Construction & Infrastructure, keywords: [construction, infrastructure, civil engineering, MEP]}
   engineering_consulting: {label: Engineering Consulting, keywords: [engineering consultancy, design consultancy, engineering consulting]}
   energy_oil_gas: {label: Energy, Oil & Gas, keywords: [oil and gas, energy, petroleum, downstream]}
-  renewable_energy: {label: Renewable Energy, keywords: [renewable, solar, wind energy, clean energy]}
+  renewable_energy: {label: Renewable Energy, keywords: [renewable energy, renewable, solar energy, solar farm, solar, BESS, battery energy storage, photovoltaic, PV, solar PV, inverter, PCS, IDT, substation, switchyard, grid connection, utility scale, energy storage, wind energy, power generation, power plant, power systems, electrical power, transmission]}
   manufacturing_industrial: {label: Manufacturing & Industrial, keywords: [manufacturing, factory, industrial]}
   logistics_supply_chain: {label: Logistics & Supply Chain, keywords: [logistics, freight, supply chain, warehousing]}
   retail: {label: Retail, keywords: [retail, store operations, merchandising, e-commerce]}
   fmcg_consumer: {label: FMCG & Consumer, keywords: [FMCG, consumer goods, food manufacturing]}
   hospitality_tourism: {label: Hospitality & Tourism, keywords: [hospitality, hotel, resort, tourism]}
   aviation: {label: Aviation, keywords: [aviation, airline, airport]}
-  education: {label: Education, keywords: [education, university, school, training provider]}
+  education: {label: Education, keywords: [education, university, school, international school, K-12, academy, training provider, principal, head of school]}
+  datacenters: {label: Datacenters, keywords: [data center, data centre, datacenter, colocation, hyperscale, data hall, co-location]}
   government_public_sector: {label: Government & Public Sector, keywords: [government, ministry, public sector]}
   professional_services: {label: Professional Services, keywords: [consulting, advisory, professional services]}
   media_entertainment_sports: {label: Media, Entertainment & Sports, keywords: [media, entertainment, sports, gaming]}

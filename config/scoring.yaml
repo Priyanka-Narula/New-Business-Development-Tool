@@ -14,13 +14,18 @@ weights:
   external_agency_potential: 10
   decision_maker_accessibility: 5
 
+market_potential:
+  high: 3
+  medium: 1
+  low: 0
+
 priority:
   high_min_score: 75
   medium_min_score: 50
   high_min_hiring_activity: 60
   high_min_seniority_match: 50
   high_min_agency_potential: 40
-  require_decision_maker_for_high: true
+  require_decision_maker_for_high: false
 
 entity_resolution:
   fuzzy_auto_accept: 92
@@ -35,6 +40,10 @@ aambridge_capabilities:
     - construction_infrastructure
     - banking_financial_services
     - hospitality_tourism
+    - education
+    - datacenters
+    - ai_data
+    - renewable_energy
   functions:
     - hr_talent
     - finance
@@ -44,3 +53,7 @@ aambridge_capabilities:
     - project_management
     - hospitality_ops
     - retail_ops
+    - education_ops
+    - datacenter_ops
+    - it_tech
+    - electrical_design

@@ -39,6 +39,15 @@ def test_parse_args_forwards_unknown_scrape_flags() -> None:
     assert scrape_args == ["--mode", "jobs", "--max-per-query", "10"]
 
 
+def test_parse_args_accepts_enrich_contacts_flag() -> None:
+    args, scrape_args = parse_args(
+        ["--skip-scrape", "--no-dashboard", "--enrich-contacts", "--enrich-limit", "5"]
+    )
+    assert args.enrich_contacts is True
+    assert args.enrich_limit == 5
+    assert scrape_args == []
+
+
 def test_database_has_records_detects_saved_jobs(tmp_path) -> None:
     engine = create_database_engine(f"sqlite:///{(tmp_path / 'pipe.db').as_posix()}")
     initialise_database(engine)

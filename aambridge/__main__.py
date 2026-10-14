@@ -279,6 +279,8 @@ def _run_decision_makers(command: str, argv: Sequence[str]) -> int:
         parser.add_argument("--source", default="manual")
         parser.add_argument("--department", default="")
         parser.add_argument("--profile-url", default="")
+        parser.add_argument("--email", default="")
+        parser.add_argument("--phone", default="")
         parser.add_argument("--verified-by", default="")
         parser.add_argument("--confidence", type=float)
         parser.add_argument("--notes", default="")
@@ -319,11 +321,98 @@ def _run_decision_makers(command: str, argv: Sequence[str]) -> int:
             source=args.source,
             department=args.department,
             profile_url=args.profile_url,
+            email=args.email,
+            phone=args.phone,
             verified_by=args.verified_by,
             confidence=args.confidence,
             notes=args.notes,
         )
         log.info("Saved decision-maker %s.", record_id)
+    return 0
+
+
+def _run_apollo(command: str, argv: Sequence[str]) -> int:
+    from aambridge.contacts.apollo import ApolloError, disclose_person, search_company_people
+
+    parser = argparse.ArgumentParser(prog=f"python -m aambridge {command}")
+    parser.add_argument("--database-url")
+    if command == "apollo-search":
+        parser.add_argument("--company-id", type=int, required=True)
+    else:
+        parser.add_argument("--person-id", type=int, required=True)
+        parser.add_argument("--verified-by", default="")
+    args = parser.parse_args(argv)
+    settings = _settings(args.database_url)
+    configure_logging(settings)
+    engine = create_database_engine(settings.database_url)
+    initialise_database(engine)
+    sessions = create_session_factory(engine)
+    try:
+        if command == "apollo-search":
+            stats = search_company_people(sessions, args.company_id)
+            log.info("Apollo search: %s", json.dumps(stats, indent=2))
+        else:
+            result = disclose_person(
+                sessions,
+                args.person_id,
+                verified_by=args.verified_by,
+            )
+            safe = dict(result)
+            if safe.get("email"):
+                safe["email"] = True
+            log.info("Apollo disclose: %s", json.dumps(safe, indent=2))
+    except (ApolloError, ValueError) as exc:
+        log.error("%s", exc)
+        return 1
+    return 0
+
+
+def _run_enrich_contacts(argv: Sequence[str]) -> int:
+    from aambridge.contacts.enrich import enrich_contacts
+
+    parser = argparse.ArgumentParser(
+        prog="python -m aambridge enrich-contacts",
+        description=(
+            "Deprecated. Do not crawl company websites or LinkedIn company pages. "
+            "Outreach contacts come from employer job listings and Apollo."
+        ),
+    )
+    parser.add_argument("--database-url")
+    parser.add_argument("--limit", type=int, default=50)
+    parser.add_argument(
+        "--priority",
+        default="HIGH,MEDIUM",
+        help="Comma-separated priorities to enrich first. Default: HIGH,MEDIUM.",
+    )
+    parser.add_argument(
+        "--skip-linkedin-people",
+        action="store_true",
+        help="Skip the LinkedIn People list. Still reads About for the website.",
+    )
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help=(
+            "Do not open Chrome. Look up official sites by company name, "
+            "then crawl Contact / Careers / Leadership pages."
+        ),
+    )
+    args = parser.parse_args(argv)
+    settings = _settings(args.database_url)
+    configure_logging(settings)
+    engine = create_database_engine(settings.database_url)
+    initialise_database(engine)
+    priorities = tuple(
+        item.strip().upper() for item in args.priority.split(",") if item.strip()
+    )
+    stats = enrich_contacts(
+        create_session_factory(engine),
+        limit=args.limit,
+        priorities=priorities or ("HIGH", "MEDIUM"),
+        skip_linkedin_people=args.skip_linkedin_people,
+        use_browser=not args.no_browser,
+    )
+    log.info("Enrich-contacts statistics: %s", stats)
     return 0
 
 
@@ -465,6 +554,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "import-decision-makers",
     }:
         return _run_decision_makers(arguments[0], arguments[1:])
+    if arguments and arguments[0] in {"apollo-search", "apollo-disclose"}:
+        return _run_apollo(arguments[0], arguments[1:])
+    if arguments and arguments[0] == "enrich-contacts":
+        return _run_enrich_contacts(arguments[1:])
     if arguments and arguments[0] == "dashboard":
         return _run_dashboard(arguments[1:])
     if arguments and arguments[0] == "export-top-50":
@@ -492,6 +585,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "decision-makers",
             "add-decision-maker",
             "import-decision-makers",
+            "apollo-search",
+            "apollo-disclose",
+            "enrich-contacts",
             "dashboard",
             "export-top-50",
             "run-all",

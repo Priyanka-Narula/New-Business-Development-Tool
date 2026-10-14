@@ -1,21 +1,30 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy import inspect, select
 
 from aambridge.dashboard.queries import (
     GRAPH_EXCLUDED_FACTORS,
+    SEARCH_SECTORS,
     TABLE_COLUMNS,
     PipelineFilters,
     company_detail,
     executive_summary,
     export_top50_csv,
     export_top50_rows,
+    focus_snapshot,
     graph_potential,
+    industry_rankings,
     pipeline_rows,
     potential_breakdown,
+    region_rankings,
+    rolling_hiring,
+    rolling_industry_chart,
+    rolling_region_chart,
     set_outreach_status,
 )
-from aambridge.db.models import Company, LeadScore
+from aambridge.db.models import Company, Job, LeadScore
 from aambridge.db.session import (
     create_database_engine,
     create_session_factory,
@@ -121,6 +130,27 @@ def test_outreach_status_column_is_added(tmp_path) -> None:
     engine, _sessions = _database(tmp_path)
     columns = {column["name"] for column in inspect(engine).get_columns("company")}
     assert "outreach_status" in columns
+    assert "lead_score_percentile" in columns
+    assert "acquisition_band" in columns
+
+
+def test_acquisition_columns_are_added_to_existing_databases(tmp_path) -> None:
+    engine = create_database_engine(
+        f"sqlite:///{(tmp_path / 'legacy.db').as_posix()}"
+    )
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE company ("
+            "id INTEGER PRIMARY KEY, "
+            "canonical_name VARCHAR(255) NOT NULL, "
+            "is_agency BOOLEAN NOT NULL DEFAULT 0, "
+            "outreach_status VARCHAR(32) NOT NULL DEFAULT 'new'"
+            ")"
+        )
+    initialise_database(engine, scrub_personal_contacts=False)
+    columns = {column["name"] for column in inspect(engine).get_columns("company")}
+    assert "lead_score_percentile" in columns
+    assert "acquisition_band" in columns
 
 
 def test_end_to_end_fixture_pipeline_feeds_dashboard(tmp_path) -> None:
@@ -131,8 +161,14 @@ def test_end_to_end_fixture_pipeline_feeds_dashboard(tmp_path) -> None:
     assert [row["company"] for row in rows] == ["Client Hospital"]
     assert rows[0]["key_contact"] == "Aisha Rahman"
     assert rows[0]["designation"] == "Head of Talent Acquisition"
+    assert rows[0]["website"] == ""
+    assert rows[0]["company_phone"] == ""
+    assert rows[0]["company_email"] == ""
     assert rows[0]["status"] == "new"
+    assert rows[0]["new_requirement"] is True
     assert rows[0]["industry"] == "healthcare"
+    assert rows[0]["acquisition_band"] == "Medium"
+    assert rows[0]["lead_score_percentile"] == 50
     assert "email" not in rows[0]
     assert "phone" not in rows[0]
 
@@ -217,3 +253,211 @@ def test_graph_potential_rescales_kept_weights_to_100() -> None:
     assert graph_potential({**kept, **ignored}) == 100
     assert graph_potential({**kept, **{name: {"score_0_100": 100} for name in GRAPH_EXCLUDED_FACTORS}}) == 100
     assert graph_potential({name: {"score_0_100": 0} for name in kept} | ignored) == 0
+
+
+def _company(name: str, band: str, industry: str, region: str, score: int = 50) -> dict:
+    return {
+        "company": name,
+        "acquisition_band": band,
+        "industry": industry,
+        "region": region,
+        "lead_score": score,
+        "lead_score_percentile": score,
+        "status": "new",
+    }
+
+
+def test_industry_and_region_rankings_follow_market_score() -> None:
+    rows = [
+        *[_company(f"Bank {index}", "High", "banking", "Dubai") for index in range(8)],
+        *[_company(f"Bank mid {index}", "Medium", "banking", "Abu Dhabi") for index in range(4)],
+        *[_company(f"Bank low {index}", "Low", "banking", "Dubai", score=10) for index in range(10)],
+        *[_company(f"Retail {index}", "High", "retail", "Riyadh") for index in range(3)],
+        *[_company(f"Retail mid {index}", "Medium", "retail", "Riyadh") for index in range(20)],
+        *[_company(f"Retail low {index}", "Low", "retail", "Jeddah", score=5) for index in range(10)],
+        _company("Unplaced", "High", "", "Dubai"),
+    ]
+    industries = industry_rankings(rows)
+    assert industries["excluded"] == 1
+    assert [item["industry"] for item in industries["rankings"]] == ["retail", "banking"]
+    assert industries["rankings"][0]["market_score"] == 29
+    assert industries["rankings"][1]["market_score"] == 28
+
+    retail_regions = region_rankings(rows, "retail")
+    assert [item["region"] for item in retail_regions["rankings"]] == ["Riyadh", "Jeddah"]
+    assert retail_regions["rankings"][0]["market_score"] == 29
+    assert retail_regions["rankings"][1]["market_score"] == 0
+    assert retail_regions["excluded"] == 0
+
+    snapshot = focus_snapshot(rows)
+    assert snapshot["leading_industry"] == "retail"
+    assert snapshot["high_uncontacted"] == 12
+    assert snapshot["first_calls"][0]["acquisition_band"] == "High"
+
+
+def _job_payload(
+    *,
+    title: str,
+    company: str,
+    industry: str,
+    country: str,
+    url: str,
+    observed_at: datetime,
+    city: str = "",
+    region: str = "",
+    posted_by_agency: bool = False,
+) -> dict:
+    return {
+        "job_title": title,
+        "company_name": company,
+        "company_linkedin_url": f"https://linkedin.com/company/{company.lower().replace(' ', '-')}",
+        "job_location": f"{city or country}",
+        "city": city,
+        "region": region,
+        "country": country,
+        "industry": industry,
+        "job_url": url,
+        "observed_at": observed_at,
+        "posted_by_agency": posted_by_agency,
+    }
+
+
+def test_rolling_hiring_counts_a_job_once_across_scans_in_the_window(tmp_path) -> None:
+    _engine, sessions = _database(tmp_path)
+    now = datetime(2026, 10, 14, tzinfo=UTC)
+    payload = _job_payload(
+        title="Solar Engineer",
+        company="Sun Co",
+        industry="green_energy",
+        country="United Arab Emirates",
+        city="Dubai",
+        region="Dubai",
+        url="https://linkedin.com/jobs/view/8801",
+        observed_at=now - timedelta(days=10),
+    )
+    first = ScanStore.start(sessions, mode="jobs", args={})
+    assert first.save_job(payload)
+    first.finish("completed")
+    second = ScanStore.start(sessions, mode="jobs", args={})
+    payload["observed_at"] = now
+    assert second.save_job(payload)
+    second.finish("completed")
+
+    facts = rolling_hiring(sessions, days=30, hide_agencies=False, now=now)
+    assert len(facts) == 1
+    assert facts[0]["industry"] == "green_energy"
+    chart = rolling_industry_chart(facts)
+    green = next(item for item in chart["rankings"] if item["industry"] == "green_energy")
+    assert green["job_count"] == 1
+    assert green["company_count"] == 0
+
+
+def test_rolling_hiring_excludes_jobs_older_than_the_window(tmp_path) -> None:
+    _engine, sessions = _database(tmp_path)
+    now = datetime(2026, 10, 14, tzinfo=UTC)
+    scan = ScanStore.start(sessions, mode="jobs", args={})
+    assert scan.save_job(
+        _job_payload(
+            title="Stale Nurse",
+            company="Old Clinic",
+            industry="healthcare",
+            country="United Arab Emirates",
+            url="https://linkedin.com/jobs/view/8802",
+            observed_at=now - timedelta(days=31),
+        )
+    )
+    assert scan.save_job(
+        _job_payload(
+            title="Current Nurse",
+            company="New Clinic",
+            industry="healthcare",
+            country="United Arab Emirates",
+            url="https://linkedin.com/jobs/view/8803",
+            observed_at=now - timedelta(days=2),
+        )
+    )
+    scan.finish("completed")
+    facts = rolling_hiring(sessions, days=30, hide_agencies=False, now=now)
+    assert len(facts) == 1
+    assert facts[0]["job_id"]
+
+
+def test_rolling_country_filter_lists_every_search_sector(tmp_path) -> None:
+    _engine, sessions = _database(tmp_path)
+    now = datetime(2026, 10, 14, tzinfo=UTC)
+    scan = ScanStore.start(sessions, mode="jobs", args={})
+    assert scan.save_job(
+        _job_payload(
+            title="Solar Engineer",
+            company="Sun Co",
+            industry="green_energy",
+            country="United Arab Emirates",
+            city="Abu Dhabi",
+            region="Abu Dhabi",
+            url="https://linkedin.com/jobs/view/8804",
+            observed_at=now - timedelta(days=5),
+        )
+    )
+    assert scan.save_job(
+        _job_payload(
+            title="Hospital Director",
+            company="Riyadh Health",
+            industry="healthcare",
+            country="Saudi Arabia",
+            city="Riyadh",
+            region="Riyadh",
+            url="https://linkedin.com/jobs/view/8805",
+            observed_at=now - timedelta(days=5),
+        )
+    )
+    assert scan.save_job(
+        _job_payload(
+            title="Agency Recruiter",
+            company="Hire Fast",
+            industry="healthcare",
+            country="United Arab Emirates",
+            city="Dubai",
+            region="Dubai",
+            url="https://linkedin.com/jobs/view/8806",
+            observed_at=now - timedelta(days=1),
+            posted_by_agency=True,
+        )
+    )
+    scan.finish("completed")
+    with sessions.begin() as session:
+        jobs = {job.title: job for job in session.scalars(select(Job))}
+        sun = Company(
+            canonical_name="Sun Co",
+            industry_key="renewable_energy",
+            is_agency=False,
+            jurisdiction="unknown",
+        )
+        agency = Company(
+            canonical_name="Hire Fast",
+            industry_key="healthcare",
+            is_agency=True,
+            jurisdiction="unknown",
+        )
+        session.add_all([sun, agency])
+        session.flush()
+        jobs["Solar Engineer"].company_id = sun.id
+        jobs["Agency Recruiter"].company_id = agency.id
+
+    facts = rolling_hiring(
+        sessions,
+        days=30,
+        countries=("United Arab Emirates",),
+        hide_agencies=True,
+        now=now,
+    )
+    assert len(facts) == 1
+    assert facts[0]["industry"] == "green_energy"
+    chart = rolling_industry_chart(facts)
+    by_industry = {item["industry"]: item for item in chart["rankings"]}
+    assert set(SEARCH_SECTORS) <= set(by_industry)
+    assert by_industry["green_energy"]["job_count"] == 1
+    assert by_industry["green_energy"]["company_count"] == 1
+    assert by_industry["healthcare"]["job_count"] == 0
+    regions = rolling_region_chart(facts, "green_energy")
+    assert regions["rankings"][0]["region"] == "Abu Dhabi"
+    assert regions["rankings"][0]["job_count"] == 1

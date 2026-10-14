@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     linkedin_email: str = ""
     linkedin_password: str = ""
+    apollo_api_key: str = ""
     database_url: str = DEFAULT_DATABASE_URL
     database_echo: bool = False
     log_dir: Path = PROJECT_ROOT / "logs"
@@ -40,4 +41,10 @@ class Settings(BaseSettings):
         """Return whether both LinkedIn credential values are available."""
 
         return bool(self.linkedin_email.strip() and self.linkedin_password)
+
+    @property
+    def has_apollo_api_key(self) -> bool:
+        """Return whether an Apollo master API key is configured."""
+
+        return bool(self.apollo_api_key.strip())
 

@@ -13,7 +13,13 @@ from aambridge.sources.linkedin_posts import (
     categorise_post,
 )
 from aambridge.db.storage import post_source_key
-from config import SearchSpec, build_post_search_specs
+from config import (
+    PRIMARY_LOCATIONS,
+    SECTOR_KEYWORDS,
+    SearchSpec,
+    build_post_search_specs,
+    build_search_specs,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -122,10 +128,12 @@ def test_post_query_sets_are_independently_selectable() -> None:
     expansion = build_post_search_specs(query_set="expansion")
     all_specs = build_post_search_specs(query_set="all")
 
-    assert len(hiring) == 24
-    assert len(expansion) == 12
-    assert len(all_specs) == 36
+    assert hiring == build_search_specs()
+    assert len(expansion) == len(SECTOR_KEYWORDS) * len(PRIMARY_LOCATIONS)
+    assert len(all_specs) == len(hiring) + len(expansion)
     assert {spec.query_set for spec in expansion} == {"expansion"}
+    assert {spec.location for spec in hiring} == set(PRIMARY_LOCATIONS)
+    assert {spec.sector for spec in hiring} == set(SECTOR_KEYWORDS)
 
 
 def test_fallback_source_key_matches_database_key() -> None:

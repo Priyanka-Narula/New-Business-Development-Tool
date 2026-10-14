@@ -94,7 +94,181 @@ countries:
 
   Qatar:
     aliases: ["Qatar", "قطر"]
-    regions: {}
+    regions:
+      Doha:
+        aliases: ["Doha", "الدوحة"]
+        cities:
+          Doha: ["Doha", "الدوحة"]
+      Al Rayyan:
+        aliases: ["Al Rayyan", "الريان"]
+        cities:
+          Al Rayyan: ["Al Rayyan", "الريان"]
+          Lusail: ["Lusail", "لوسيل"]
+      Al Wakrah:
+        aliases: ["Al Wakrah", "الوكرة"]
+        cities:
+          Al Wakrah: ["Al Wakrah", "الوكرة"]
+
+  Malaysia:
+    aliases: ["Malaysia"]
+    regions:
+      Kuala Lumpur:
+        aliases: ["Kuala Lumpur", "Wilayah Persekutuan", "Federal Territory"]
+        cities:
+          Kuala Lumpur: ["Kuala Lumpur", "KL"]
+      Selangor:
+        aliases: ["Selangor"]
+        cities:
+          Petaling Jaya: ["Petaling Jaya", "PJ"]
+          Shah Alam: ["Shah Alam"]
+          Cyberjaya: ["Cyberjaya"]
+      Penang:
+        aliases: ["Penang", "Pulau Pinang"]
+        cities:
+          George Town: ["George Town", "Georgetown", "Penang"]
+      Johor:
+        aliases: ["Johor"]
+        cities:
+          Johor Bahru: ["Johor Bahru", "JB"]
+
+  Australia:
+    aliases: ["Australia"]
+    regions:
+      New South Wales:
+        aliases: ["New South Wales", "NSW"]
+        cities:
+          Sydney: ["Sydney"]
+      Victoria:
+        aliases: ["Victoria"]
+        cities:
+          Melbourne: ["Melbourne"]
+      Queensland:
+        aliases: ["Queensland", "QLD"]
+        cities:
+          Brisbane: ["Brisbane"]
+      Western Australia:
+        aliases: ["Western Australia", "WA"]
+        cities:
+          Perth: ["Perth"]
+      South Australia:
+        aliases: ["South Australia", "SA"]
+        cities:
+          Adelaide: ["Adelaide"]
+      Australian Capital Territory:
+        aliases: ["Australian Capital Territory", "ACT"]
+        cities:
+          Canberra: ["Canberra"]
+
+  United Kingdom:
+    aliases: ["United Kingdom", "UK", "Great Britain"]
+    regions:
+      London:
+        aliases: ["Greater London"]
+        cities:
+          London: ["London"]
+      England:
+        aliases: ["England"]
+        cities:
+          Manchester: ["Manchester"]
+          Birmingham: ["Birmingham"]
+          Leeds: ["Leeds"]
+          Bristol: ["Bristol"]
+      Scotland:
+        aliases: ["Scotland"]
+        cities:
+          Edinburgh: ["Edinburgh"]
+          Glasgow: ["Glasgow"]
+      Wales:
+        aliases: ["Wales"]
+        cities:
+          Cardiff: ["Cardiff"]
+
+  Germany:
+    aliases: ["Germany", "Deutschland"]
+    regions:
+      Berlin:
+        aliases: ["Berlin"]
+        cities:
+          Berlin: ["Berlin"]
+      Bavaria:
+        aliases: ["Bavaria", "Bayern"]
+        cities:
+          Munich: ["Munich", "München"]
+      Hesse:
+        aliases: ["Hesse", "Hessen"]
+        cities:
+          Frankfurt: ["Frankfurt", "Frankfurt am Main"]
+      Hamburg:
+        aliases: ["Hamburg"]
+        cities:
+          Hamburg: ["Hamburg"]
+      North Rhine-Westphalia:
+        aliases: ["North Rhine-Westphalia", "Nordrhein-Westfalen", "NRW"]
+        cities:
+          Cologne: ["Cologne", "Köln"]
+          Düsseldorf: ["Düsseldorf", "Dusseldorf"]
+      Baden-Württemberg:
+        aliases: ["Baden-Württemberg", "Baden-Wurttemberg"]
+        cities:
+          Stuttgart: ["Stuttgart"]
+
+  Canada:
+    aliases: ["Canada"]
+    regions:
+      Ontario:
+        aliases: ["Ontario"]
+        cities:
+          Toronto: ["Toronto"]
+          Ottawa: ["Ottawa"]
+      British Columbia:
+        aliases: ["British Columbia", "BC"]
+        cities:
+          Vancouver: ["Vancouver"]
+      Quebec:
+        aliases: ["Quebec", "Québec"]
+        cities:
+          Montreal: ["Montreal", "Montréal"]
+      Alberta:
+        aliases: ["Alberta"]
+        cities:
+          Calgary: ["Calgary"]
+          Edmonton: ["Edmonton"]
+
+  United States:
+    aliases: ["United States", "USA", "US", "United States of America"]
+    regions:
+      New York:
+        aliases: ["New York", "NY"]
+        cities:
+          New York: ["New York", "New York City", "NYC"]
+      California:
+        aliases: ["California", "CA"]
+        cities:
+          San Francisco: ["San Francisco"]
+          Los Angeles: ["Los Angeles"]
+      Illinois:
+        aliases: ["Illinois", "IL"]
+        cities:
+          Chicago: ["Chicago"]
+      Texas:
+        aliases: ["Texas", "TX"]
+        cities:
+          Houston: ["Houston"]
+          Dallas: ["Dallas"]
+          Austin: ["Austin"]
+      Washington:
+        aliases: ["Washington", "WA"]
+        cities:
+          Seattle: ["Seattle"]
+      Massachusetts:
+        aliases: ["Massachusetts", "MA"]
+        cities:
+          Boston: ["Boston"]
+      District of Columbia:
+        aliases: ["District of Columbia", "DC"]
+        cities:
+          Washington DC: ["Washington DC", "Washington, DC", "Washington D.C."]
+
   Bahrain:
     aliases: ["Bahrain", "البحرين"]
     regions: {}

@@ -86,6 +86,93 @@ def _apply_pilot_additive_migrations(engine: Engine) -> None:
                 "CREATE INDEX IF NOT EXISTS ix_company_outreach_status "
                 "ON company (outreach_status)"
             )
+    if "lead_score_percentile" not in columns:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "ALTER TABLE company ADD COLUMN lead_score_percentile FLOAT"
+            )
+    if "acquisition_band" not in columns:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "ALTER TABLE company ADD COLUMN acquisition_band VARCHAR(16)"
+            )
+            connection.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_company_acquisition_band "
+                "ON company (acquisition_band)"
+            )
+    _add_column_if_missing(
+        engine,
+        "decision_maker",
+        "email",
+        "ALTER TABLE decision_maker ADD COLUMN email VARCHAR(320)",
+    )
+    _add_column_if_missing(
+        engine,
+        "decision_maker",
+        "phone",
+        "ALTER TABLE decision_maker ADD COLUMN phone VARCHAR(64)",
+    )
+    _add_column_if_missing(
+        engine,
+        "decision_maker",
+        "apollo_person_id",
+        "ALTER TABLE decision_maker ADD COLUMN apollo_person_id VARCHAR(64)",
+    )
+    _add_column_if_missing(
+        engine,
+        "decision_maker",
+        "email_status",
+        "ALTER TABLE decision_maker ADD COLUMN email_status VARCHAR(64)",
+    )
+    _add_column_if_missing(
+        engine,
+        "decision_maker",
+        "disclosed_at",
+        "ALTER TABLE decision_maker ADD COLUMN disclosed_at TIMESTAMP",
+    )
+    _add_unique_index_if_missing(
+        engine,
+        "decision_maker",
+        "ix_decision_maker_apollo_person_id",
+        "apollo_person_id",
+    )
+
+
+def _add_column_if_missing(
+    engine: Engine,
+    table: str,
+    column: str,
+    ddl: str,
+) -> None:
+    inspector = inspect(engine)
+    if table not in inspector.get_table_names():
+        return
+    names = {item["name"] for item in inspector.get_columns(table)}
+    if column in names:
+        return
+    with engine.begin() as connection:
+        connection.exec_driver_sql(ddl)
+
+
+def _add_unique_index_if_missing(
+    engine: Engine,
+    table: str,
+    index_name: str,
+    column: str,
+) -> None:
+    inspector = inspect(engine)
+    if table not in inspector.get_table_names():
+        return
+    for item in inspector.get_indexes(table):
+        if item.get("unique") and list(item.get("column_names") or []) == [column]:
+            return
+    for item in inspector.get_unique_constraints(table):
+        if list(item.get("column_names") or []) == [column]:
+            return
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} ON {table} ({column})"
+        )
 
 
 def _scrub_existing_personal_contacts(engine: Engine) -> None:

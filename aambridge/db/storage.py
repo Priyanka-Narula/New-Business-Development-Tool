@@ -179,7 +179,24 @@ class ScanStore:
     def save_job(self, values: Mapping[str, Any]) -> bool:
         """Upsert a job and add at most one observation for this scan."""
 
+        from aambridge.contacts.listing import listing_emails, parse_end_client_name
+
+        original_blob = " ".join(
+            str(values.get(key) or "")
+            for key in ("description", "raw_text", "job_title", "company_name")
+        )
+        posted_by_agency = bool(values.get("posted_by_agency"))
+        copied_emails = [] if posted_by_agency else listing_emails(original_blob)
+        end_client_name = (
+            parse_end_client_name(original_blob) if posted_by_agency else ""
+        )
+        hint = values.get("end_client_hint")
+        if posted_by_agency and not end_client_name and isinstance(hint, Mapping):
+            end_client_name = str(hint.get("company_name") or "")
+
         fields = _json_safe(values)
+        fields["listing_emails"] = copied_emails
+        fields["end_client_name"] = end_client_name
         observed_at = _datetime_value(fields.get("observed_at"))
         raw_text = str(fields.get("raw_text") or "").strip() or " ".join(
             str(fields.get(key, ""))

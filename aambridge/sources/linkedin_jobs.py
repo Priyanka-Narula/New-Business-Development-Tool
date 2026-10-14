@@ -314,6 +314,9 @@ def detect_nationality_restriction(text: str) -> tuple[bool, str]:
 
 
 def detect_end_client_hint(text: str) -> dict[str, str]:
+    from aambridge.contacts.listing import parse_end_client_name
+
+    company_name = parse_end_client_name(text)
     for phrase in _job_config().get("end_client_phrases", []):
         match = re.search(re.escape(str(phrase)), text, re.IGNORECASE)
         if match:
@@ -321,10 +324,18 @@ def detect_end_client_hint(text: str) -> dict[str, str]:
             snippet = re.split(r"(?<=[.!?])\s", tail, maxsplit=1)[0]
             return {
                 "value": snippet,
+                "company_name": company_name,
                 "evidence": match.group(0),
                 "basis": "inference",
             }
-    return {"value": "", "evidence": "", "basis": "unknown"}
+    if company_name:
+        return {
+            "value": company_name,
+            "company_name": company_name,
+            "evidence": company_name,
+            "basis": "inference",
+        }
+    return {"value": "", "company_name": "", "evidence": "", "basis": "unknown"}
 
 
 def _alias_match(text: str, alias: str) -> bool:
