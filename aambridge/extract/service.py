@@ -35,6 +35,7 @@ class SourceInput:
     input_text: str
     cache_key: str
     prompt_version: str
+    content_hash: str
 
 
 def extraction_cache_key(input_text: str, prompt_version: str, model: str) -> str:
@@ -56,6 +57,7 @@ def source_input(record: SourceRecord, model: str) -> SourceInput:
         input_text=input_text,
         cache_key=extraction_cache_key(input_text, prompt_version, model),
         prompt_version=prompt_version,
+        content_hash=record.content_hash,
     )
 
 
@@ -206,12 +208,35 @@ def process_database(
                 )
             )
         ) if cache_keys else []
+        hashes = {item.content_hash for item in items if item.content_hash}
+        hash_rows = list(
+            session.execute(
+                select(
+                    SourceRecord.content_hash,
+                    Extraction.prompt_version,
+                    Extraction.model_name,
+                    Extraction.result_json,
+                )
+                .join(Extraction, Extraction.source_record_id == SourceRecord.id)
+                .where(
+                    SourceRecord.content_hash.in_(hashes),
+                    Extraction.status == "completed",
+                    Extraction.model_name == model,
+                )
+            )
+        ) if hashes else []
     cached = {row.cache_key: row.result_json for row in cached_rows}
+    hash_cached = {
+        (content_hash, prompt_version): payload
+        for content_hash, prompt_version, _model_name, payload in hash_rows
+    }
     stats = {"processed": 0, "cached": 0, "failed": 0, "hallucinations_rejected": 0}
     pending: list[SourceInput] = []
 
     for item in items:
-        payload = cached.get(item.cache_key)
+        payload = cached.get(item.cache_key) or hash_cached.get(
+            (item.content_hash, item.prompt_version)
+        )
         if payload:
             with session_factory.begin() as session:
                 _mark_cached(session, item, model=model, payload=payload)
@@ -303,6 +328,7 @@ def clean_csv(
             input_text=text,
             cache_key=extraction_cache_key(text, version, model),
             prompt_version=version,
+            content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
         )
         result, _rejected = extract_one(
             item,
@@ -348,6 +374,7 @@ def evaluate_labelled_csv(
             input_text=text,
             cache_key=extraction_cache_key(text, version, model),
             prompt_version=version,
+            content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
         )
         result, _rejected = extract_one(
             item,

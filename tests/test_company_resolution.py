@@ -5,7 +5,13 @@ from datetime import UTC, datetime
 from rapidfuzz.fuzz import ratio
 from sqlalchemy import func, select
 
-from aambridge.db.models import Company, CompanyAlias, CompanyMergeReview, Job
+from aambridge.db.models import (
+    Company,
+    CompanyAlias,
+    CompanyContact,
+    CompanyMergeReview,
+    Job,
+)
 from aambridge.db.session import (
     create_database_engine,
     create_session_factory,
@@ -134,6 +140,72 @@ def test_resolution_links_agency_posted_job_to_agency_company(tmp_path) -> None:
         job = session.scalar(select(Job))
         assert company is not None and company.is_agency
         assert job.company_id == company.id
+        assert session.scalar(select(CompanyContact)) is None
+
+
+def test_employer_job_copies_listing_email_and_agency_job_keeps_end_client(
+    tmp_path,
+) -> None:
+    sessions = _database(tmp_path)
+    scan = ScanStore.start(sessions, mode="jobs", args={})
+    assert scan.save_job(
+        {
+            "job_title": "HR Manager",
+            "company_name": "Client Hospital",
+            "job_location": "Dubai, United Arab Emirates",
+            "country": "United Arab Emirates",
+            "job_url": "https://linkedin.com/jobs/view/801",
+            "description": "Apply at careers@clienthospital.ae",
+            "posted_by_agency": False,
+        }
+    )
+    assert scan.save_job(
+        {
+            "job_title": "Finance Director",
+            "company_name": "Example Executive Search",
+            "job_location": "Dubai, United Arab Emirates",
+            "country": "United Arab Emirates",
+            "job_url": "https://linkedin.com/jobs/view/802",
+            "description": (
+                "Hiring on behalf of Desert Solar LLC. "
+                "Recruiter email agency@search.com"
+            ),
+            "posted_by_agency": True,
+        }
+    )
+    scan.finish("completed")
+    resolve_all(sessions)
+
+    with sessions() as session:
+        names = {
+            company.canonical_name: company
+            for company in session.scalars(select(Company))
+        }
+        assert "Client Hospital" in names
+        assert "Desert Solar LLC" in names
+        assert names["Desert Solar LLC"].is_agency is False
+        hospital_emails = list(
+            session.scalars(
+                select(CompanyContact).where(
+                    CompanyContact.company_id == names["Client Hospital"].id,
+                    CompanyContact.kind == "email",
+                )
+            )
+        )
+        assert [item.value for item in hospital_emails] == ["careers@clienthospital.ae"]
+        client_emails = list(
+            session.scalars(
+                select(CompanyContact).where(
+                    CompanyContact.company_id == names["Desert Solar LLC"].id,
+                    CompanyContact.kind == "email",
+                )
+            )
+        )
+        assert client_emails == []
+        agency_job = session.scalar(select(Job).where(Job.source_key == "802"))
+        assert agency_job is not None
+        assert agency_job.company_name_raw == "Example Executive Search"
+        assert agency_job.company_id == names["Desert Solar LLC"].id
 
 
 def test_group_and_override_csv_imports_apply_to_resolved_companies(
@@ -155,8 +227,8 @@ def test_group_and_override_csv_imports_apply_to_resolved_companies(
     )
     overrides = tmp_path / "overrides.csv"
     overrides.write_text(
-        "company_name,size_band,jurisdiction,hq_country,industry_key\n"
-        "Client Hospital,250-999,mainland,Saudi Arabia,healthcare\n",
+        "company_name,size_band,jurisdiction,hq_country,industry_key,website\n"
+        "Client Hospital,250-999,mainland,Saudi Arabia,healthcare,https://www.clienthospital.ae\n",
         encoding="utf-8",
     )
 
@@ -169,3 +241,4 @@ def test_group_and_override_csv_imports_apply_to_resolved_companies(
         assert company.size_band == "250-999"
         assert company.jurisdiction == "mainland"
         assert company.hq_country == "Saudi Arabia"
+        assert company.website == "https://www.clienthospital.ae"

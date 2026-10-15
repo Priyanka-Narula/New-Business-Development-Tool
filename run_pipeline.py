@@ -29,6 +29,7 @@ STAGES = (
     "RESOLVE",
     "SIGNALS",
     "SCORE",
+    "ENRICH",
     "EXPORT",
     "DASHBOARD",
 )
@@ -120,6 +121,25 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[argparse.Namespace, l
         action="store_true",
         help="Export files and exit without starting Streamlit.",
     )
+    parser.add_argument(
+        "--enrich-contacts",
+        action="store_true",
+        help=(
+            "Deprecated. Do not use. Contacts come from employer job listings "
+            "and owner-triggered Apollo, not website or LinkedIn company pages."
+        ),
+    )
+    parser.add_argument(
+        "--enrich-limit",
+        type=int,
+        default=50,
+        help="Max companies to enrich when --enrich-contacts is set.",
+    )
+    parser.add_argument(
+        "--skip-linkedin-people",
+        action="store_true",
+        help="When enriching, skip the LinkedIn People list.",
+    )
     parser.add_argument("--port", type=int, default=8501)
     return parser.parse_known_args(argv)
 
@@ -154,6 +174,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         has_records,
     )
 
+    from aambridge.dashboard.marketing import export_marketing_pack
     from aambridge.dashboard.queries import PipelineFilters, export_top50_csv
     from aambridge.db.storage import export_csv
     from aambridge.extract.service import process_database
@@ -234,14 +255,38 @@ def main(argv: Sequence[str] | None = None) -> int:
     score_stats = score_companies(sessions)
     _summarise("Scoring", score_stats)
 
+    if args.enrich_contacts:
+        from aambridge.contacts.enrich import enrich_contacts
+
+        _banner(
+            6,
+            "ENRICH",
+            module="aambridge.contacts.enrich.enrich_contacts",
+            file="aambridge/contacts/enrich.py",
+        )
+        enrich_stats = enrich_contacts(
+            sessions,
+            limit=args.enrich_limit,
+            skip_linkedin_people=args.skip_linkedin_people,
+        )
+        _summarise("Enrich contacts", enrich_stats)
+    else:
+        _banner(
+            6,
+            "ENRICH",
+            module="aambridge.contacts.enrich.enrich_contacts",
+            file="aambridge/contacts/enrich.py",
+            extra="status: skipped (pass --enrich-contacts)",
+        )
+
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     top50_path = output_dir / "aambridge_top50.csv"
     _banner(
-        6,
+        7,
         "EXPORT",
-        module="aambridge.db.storage.export_csv / aambridge.dashboard.queries.export_top50_csv",
-        file="aambridge/db/storage.py, aambridge/dashboard/queries.py",
+        module="aambridge.db.storage.export_csv / aambridge.dashboard.queries.export_top50_csv / aambridge.dashboard.marketing.export_marketing_pack",
+        file="aambridge/db/storage.py, aambridge/dashboard/queries.py, aambridge/dashboard/marketing.py",
     )
     export_csv(sessions, output_dir)
     export_top50_csv(
@@ -249,17 +294,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         top50_path,
         PipelineFilters(hide_agencies=True, limit=50),
     )
+    marketing_dir = output_dir / "marketing"
+    export_marketing_pack(sessions, marketing_dir)
     jobs_csv = output_dir / "linkedin_me_jobs.csv"
     posts_csv = output_dir / "linkedin_me_posts.csv"
     _summarise(
         "Exports",
-        f"{jobs_csv} | {posts_csv} | {top50_path}",
+        f"{jobs_csv} | {posts_csv} | {top50_path} | {marketing_dir}",
     )
 
     dashboard_url = f"http://localhost:{args.port}"
     if args.no_dashboard:
         _banner(
-            7,
+            8,
             "DASHBOARD",
             module="aambridge.dashboard.app",
             file="aambridge/dashboard/app.py",
@@ -267,7 +314,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     else:
         _banner(
-            7,
+            8,
             "DASHBOARD",
             module="aambridge.dashboard.app",
             file="aambridge/dashboard/app.py",

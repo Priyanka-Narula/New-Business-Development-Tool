@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from sqlalchemy import func, select
 
@@ -16,6 +18,7 @@ from aambridge.scoring.bands import (
     market_score,
     percentile_map,
 )
+from aambridge.extract.taxonomies import load_yaml
 from aambridge.scoring.engine import score_companies, score_context
 from aambridge.scoring.factors import CompanyScoreContext
 
@@ -50,8 +53,6 @@ CAPABILITY_FUNCTIONS = frozenset(
                 industry="healthcare",
                 industry_opportunity=85,
                 market_source_note="Fixture market input",
-                size_band="250-999",
-                has_group=True,
                 functions=frozenset({"clinical", "hr_talent"}),
                 capability_industries=CAPABILITY_INDUSTRIES,
                 capability_functions=CAPABILITY_FUNCTIONS,
@@ -60,7 +61,7 @@ CAPABILITY_FUNCTIONS = frozenset(
                 specialist_jobs=2,
                 decision_maker_rank=1,
             ),
-            88,
+            89,
             "HIGH",
         ),
         (
@@ -73,12 +74,11 @@ CAPABILITY_FUNCTIONS = frozenset(
                 industry="retail",
                 industry_opportunity=82,
                 market_source_note="Fixture market input",
-                size_band="1-49",
                 functions=frozenset({"retail_ops"}),
                 capability_industries=CAPABILITY_INDUSTRIES,
                 capability_functions=CAPABILITY_FUNCTIONS,
             ),
-            34,
+            33,
             "LOW",
         ),
         (
@@ -102,13 +102,12 @@ CAPABILITY_FUNCTIONS = frozenset(
                 industry="construction_infrastructure",
                 industry_opportunity=95,
                 market_source_note="Fixture market input",
-                size_band="50-249",
                 functions=frozenset({"engineering", "project_management"}),
                 capability_industries=CAPABILITY_INDUSTRIES,
                 capability_functions=CAPABILITY_FUNCTIONS,
                 specialist_jobs=1,
             ),
-            61,
+            59,
             "MEDIUM",
         ),
         (
@@ -124,7 +123,6 @@ CAPABILITY_FUNCTIONS = frozenset(
                 industry="healthcare",
                 industry_opportunity=85,
                 market_source_note="Fixture market input",
-                size_band="250-999",
                 functions=frozenset({"clinical"}),
                 capability_industries=CAPABILITY_INDUSTRIES,
                 capability_functions=CAPABILITY_FUNCTIONS,
@@ -132,8 +130,8 @@ CAPABILITY_FUNCTIONS = frozenset(
                 nationality_restricted_jobs=2,
                 specialist_jobs=2,
             ),
-            78,
-            "MEDIUM",
+            79,
+            "HIGH",
         ),
     ],
 )
@@ -150,7 +148,6 @@ def test_five_hand_built_company_scores(
         "hiring_activity",
         "industry_opportunity",
         "seniority_match",
-        "company_potential",
         "aambridge_fit",
         "external_agency_potential",
         "decision_maker_accessibility",
@@ -202,7 +199,6 @@ def test_database_scoring_persists_explanation_and_skips_agencies(tmp_path) -> N
             "hiring_activity",
             "industry_opportunity",
             "seniority_match",
-            "company_potential",
             "aambridge_fit",
             "external_agency_potential",
             "decision_maker_accessibility",
@@ -219,6 +215,51 @@ def test_database_scoring_persists_explanation_and_skips_agencies(tmp_path) -> N
         assert client.acquisition_band == "Medium"
         assert agency.lead_score_percentile is None
         assert agency.acquisition_band is None
+
+
+def test_scoring_includes_jobs_from_prior_scan_inside_window(tmp_path) -> None:
+    engine = create_database_engine(
+        f"sqlite:///{(tmp_path / 'score-window.db').as_posix()}"
+    )
+    initialise_database(engine)
+    sessions = create_session_factory(engine)
+    first = ScanStore.start(sessions, mode="jobs", args={})
+    assert first.save_job(
+        {
+            "job_title": "Healthcare Operations Manager",
+            "company_name": "Client Hospital",
+            "company_linkedin_url": "https://linkedin.com/company/client-hospital",
+            "job_location": "Dubai, United Arab Emirates",
+            "city": "Dubai",
+            "country": "United Arab Emirates",
+            "industry": "healthcare",
+            "job_url": "https://linkedin.com/jobs/view/6101",
+            "seniority_hint": "manager",
+            "observed_at": datetime.now(UTC) - timedelta(days=10),
+        }
+    )
+    first.finish("completed")
+    resolve_all(sessions)
+    second = ScanStore.start(sessions, mode="jobs", args={})
+    second.finish("completed")
+
+    stats = score_companies(sessions, scan_run_id=second.scan_run_id)
+
+    assert stats["scored"] == 1
+    with sessions() as session:
+        score = session.scalar(
+            select(LeadScore).where(LeadScore.scan_run_id == second.scan_run_id)
+        )
+        assert score is not None
+        assert score.company_id is not None
+
+
+def test_scoring_weights_drop_company_potential() -> None:
+    weights = load_yaml("config/scoring.yaml")["weights"]
+    assert "company_potential" not in weights
+    assert weights["hiring_activity"] == 35
+    assert sum(weights.values()) == 100
+    assert int(load_yaml("config/scoring.yaml")["active_job_days"]) == 30
 
 
 def test_percentile_tertiles_and_ties() -> None:

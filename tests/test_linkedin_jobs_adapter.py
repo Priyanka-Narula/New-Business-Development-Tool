@@ -8,6 +8,7 @@ import pytest
 from selenium.webdriver.common.by import By
 
 from aambridge.__main__ import main as aambridge_main
+from aambridge.contacts.listing import listing_emails, parse_end_client_name
 from aambridge.sources.linkedin_jobs import (
     _parse_card,
     _parse_criteria,
@@ -136,6 +137,48 @@ def test_location_parser_maps_aliases_and_never_guesses_unknown_values() -> None
         "country": "Saudi Arabia",
         "location_unmatched": False,
     }
+    assert parse_location("Doha, Qatar") == {
+        "city": "Doha",
+        "region": "Doha",
+        "country": "Qatar",
+        "location_unmatched": False,
+    }
+    assert parse_location("Kuala Lumpur, Malaysia") == {
+        "city": "Kuala Lumpur",
+        "region": "Kuala Lumpur",
+        "country": "Malaysia",
+        "location_unmatched": False,
+    }
+    assert parse_location("Sydney, Australia") == {
+        "city": "Sydney",
+        "region": "New South Wales",
+        "country": "Australia",
+        "location_unmatched": False,
+    }
+    assert parse_location("London, United Kingdom") == {
+        "city": "London",
+        "region": "London",
+        "country": "United Kingdom",
+        "location_unmatched": False,
+    }
+    assert parse_location("Berlin, Germany") == {
+        "city": "Berlin",
+        "region": "Berlin",
+        "country": "Germany",
+        "location_unmatched": False,
+    }
+    assert parse_location("Toronto, Canada") == {
+        "city": "Toronto",
+        "region": "Ontario",
+        "country": "Canada",
+        "location_unmatched": False,
+    }
+    assert parse_location("Austin, United States") == {
+        "city": "Austin",
+        "region": "Texas",
+        "country": "United States",
+        "location_unmatched": False,
+    }
     assert parse_location("Unlisted Industrial Zone")["location_unmatched"]
 
 
@@ -150,11 +193,25 @@ def test_deterministic_flags_retain_evidence_and_inference_basis() -> None:
 
     assert restricted and evidence == "للمواطنين فقط"
     assert agency and agency_evidence == "executive search"
-    assert hint == {
-        "value": "on behalf of a leading hospital in Riyadh.",
-        "evidence": "on behalf of",
-        "basis": "inference",
-    }
+    assert hint["value"] == "on behalf of a leading hospital in Riyadh."
+    assert hint["evidence"] == "on behalf of"
+    assert hint["basis"] == "inference"
+    assert hint["company_name"] == ""
+
+
+def test_end_client_name_is_parsed_only_when_a_company_is_named() -> None:
+    assert (
+        parse_end_client_name(
+            "Hiring on behalf of Acme Hospital LLC in Riyadh. Apply today."
+        )
+        == "Acme Hospital LLC"
+    )
+    assert parse_end_client_name(
+        "We are hiring on behalf of a leading hospital in Riyadh."
+    ) == ""
+    assert listing_emails(
+        "Email careers@hospital.ae or nora.person@gmail.com"
+    ) == ["careers@hospital.ae", "nora.person@gmail.com"]
 
 
 def test_job_criteria_are_kept_as_raw_deterministic_baselines() -> None:

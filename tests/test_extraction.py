@@ -152,6 +152,53 @@ def test_database_extraction_saves_result_and_reuses_cache(tmp_path) -> None:
         )
 
 
+def test_extraction_reuses_result_when_content_hash_matches(tmp_path) -> None:
+    sessions = _database(tmp_path)
+    scan = ScanStore.start(sessions, mode="jobs", args={})
+    shared = {
+        "job_title": "Solar Engineer",
+        "company_name": "Sun Co",
+        "job_location": "Toronto, Canada",
+        "description": "Full-time solar energy role.",
+    }
+    assert scan.save_job({**shared, "job_url": "https://www.linkedin.com/jobs/view/2001"})
+    scan.finish("completed")
+    calls = 0
+
+    def fake_call(_prompt: str, _model: str, _timeout: int):
+        nonlocal calls
+        calls += 1
+        return {}
+
+    process_database(
+        sessions,
+        model="fixture",
+        workers=1,
+        timeout=1,
+        max_chars=2000,
+        call=fake_call,
+    )
+    later = ScanStore.start(sessions, mode="jobs", args={})
+    assert later.save_job(
+        {
+            **shared,
+            "job_url": "https://www.linkedin.com/jobs/view/2002",
+            "query": "solar energy",
+        }
+    )
+    later.finish("completed")
+    cached = process_database(
+        sessions,
+        model="fixture",
+        workers=1,
+        timeout=1,
+        max_chars=2000,
+        call=fake_call,
+    )
+    assert cached["cached"] == 1
+    assert calls == 1
+
+
 def test_failed_extraction_remains_retryable_with_attempt_count(tmp_path) -> None:
     sessions = _database(tmp_path)
     scan = ScanStore.start(sessions, mode="posts", args={})

@@ -30,8 +30,6 @@ class CompanyScoreContext:
     industry: str = ""
     industry_opportunity: float | None = None
     market_source_note: str = ""
-    size_band: str = ""
-    has_group: bool = False
     functions: frozenset[str] = frozenset()
     capability_industries: frozenset[str] = frozenset()
     capability_functions: frozenset[str] = frozenset()
@@ -46,7 +44,7 @@ def hiring_activity(context: CompanyScoreContext) -> FactorResult:
     if context.active_jobs == 0:
         return FactorResult(
             0,
-            ["No active jobs observed in this scan"],
+            ["No active jobs observed in the scoring window"],
             list(context.evidence_ids),
             "unknown",
             ["active_jobs"],
@@ -124,39 +122,6 @@ def seniority_match(context: CompanyScoreContext) -> FactorResult:
         list(context.evidence_ids),
         "fact",
         [],
-    )
-
-
-def company_potential(context: CompanyScoreContext) -> FactorResult:
-    size_scores = {
-        "1-49": 20,
-        "50-249": 60,
-        "250-999": 80,
-        "1000+": 100,
-    }
-    if context.size_band not in size_scores:
-        return FactorResult(
-            0,
-            ["Company size band is unknown"],
-            list(context.evidence_ids),
-            "unknown",
-            ["size_band"],
-        )
-    missing: list[str] = []
-    size = size_scores.get(context.size_band, 0)
-    score = size * 0.6 + min(30, context.distinct_locations * 10)
-    score += 10 if context.has_group else 0
-    reasons = [f"Hiring across {context.distinct_locations} location(s)"]
-    if context.size_band:
-        reasons.append(f"Company size band: {context.size_band}")
-    if context.has_group:
-        reasons.append("Company belongs to a known group")
-    return FactorResult(
-        min(100.0, score),
-        reasons,
-        list(context.evidence_ids),
-        "fact" if not missing else "unknown",
-        missing,
     )
 
 

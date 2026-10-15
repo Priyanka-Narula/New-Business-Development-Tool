@@ -4,17 +4,23 @@ Collects public LinkedIn hiring posts and Jobs listings for a recruitment
 agency focused on:
 
 - healthcare
-- green energy
+- green energy (renewable energy, solar energy, power generation)
 - real estate
 - construction and infrastructure
 - hospitality
 - retail
+- education (schools and educational institutions)
+- datacenters
+- AI-related roles
 
-The default market is Saudi Arabia and the United Arab Emirates. Target roles
+The default markets are Saudi Arabia, the United Arab Emirates, Qatar,
+Malaysia, Australia, the United Kingdom, Germany, Canada, and the
+United States. Target roles
 include specialists, functional experts, managers, senior managers,
 department heads, directors, and leadership-level professionals. An optional
-flag adds Qatar, Bahrain, Oman, and Kuwait. Collection keeps all experience
-levels by default so later scoring can compare junior and senior hiring volume.
+`--gcc` flag also adds Bahrain, Oman, and Kuwait. Collection keeps all
+experience levels by default so later scoring can compare junior and senior
+hiring volume.
 
 ## Responsible use
 
@@ -51,9 +57,11 @@ Copy-Item .env.example .env
 ```
 
 Edit `.env` locally if you want automatic form filling. Leave either credential
-blank to use manual login. Set `DATABASE_URL` to the Neon pooled connection
-string to share data with the team; leave it unset to use local SQLite.
-Runtime logs are written to the console and rotating files under `logs/`.
+blank to use manual login. Set `APOLLO_API_KEY` to search Apollo people from
+the dashboard and spend credits only when you disclose an email. Set
+`DATABASE_URL` to the Neon pooled connection string to share data with the
+team; leave it unset to use local SQLite. Runtime logs are written to the
+console and rotating files under `logs/`.
 
 ## Shared Neon database
 
@@ -94,16 +102,21 @@ data, it skips scrape and continues from extraction.
 # Auto: scrape if empty, otherwise clean → resolve → signals → score → export → dashboard
 .\.venv\Scripts\python.exe run_pipeline.py
 
-# Always scrape first, then the rest of the pipeline
-.\.venv\Scripts\python.exe run_pipeline.py --scrape --mode both --max-per-query 10
+# Repeat a scan (required once the database already has rows)
+.\.venv\Scripts\python.exe run_pipeline.py --scrape --mode both --time-filter week --descriptions --max-per-query 15 --no-dashboard
 
 # Never scrape; fail if the database is empty
 .\.venv\Scripts\python.exe run_pipeline.py --skip-scrape --no-dashboard
 ```
 
+Do not crawl company websites or LinkedIn company pages. Employer-posted
+jobs copy listing emails onto the company. Agency-posted jobs keep the
+end-client company name only. Named people come from Apollo after you
+choose a company on the dashboard.
+
 Watch the flow while it runs:
 
-- Terminal banners: `[1/7] SCRAPE` through `[7/7] DASHBOARD`, each naming the
+- Terminal banners: `[1/8] SCRAPE` through `[8/8] DASHBOARD`, each naming the
   Python module and file about to execute, then a one-line stats summary.
 - Same lines also go to `logs\aambridge.log`.
 - Line-by-line stepping: open `run_pipeline.py` in Cursor, set breakpoints in
@@ -117,6 +130,7 @@ Outputs after a successful run:
 - `output\linkedin_me_jobs.csv`
 - `output\linkedin_me_posts.csv`
 - `output\aambridge_top50.csv`
+- `output\marketing\` (social-safe aggregates; see `docs\MARKETING_REPORTS.md`)
 - Dashboard at `http://localhost:8501` unless you pass `--no-dashboard`
 
 Unknown flags such as `--mode`, `--sectors`, and `--time-filter` are forwarded
@@ -124,7 +138,7 @@ to `run_scraper.py` when a scrape runs.
 
 ## Run
 
-Both sources, all six sectors, KSA and UAE, past week:
+Both sources, all sectors, default markets, past week:
 
 ```powershell
 .\.venv\Scripts\python.exe -m aambridge scrape --mode both
@@ -150,11 +164,16 @@ Examples:
 .\.venv\Scripts\python.exe run_scraper.py --mode jobs --experience-levels mid_senior director executive
 
 # Search posts for expansion and project-award signals
-.\.venv\Scripts\python.exe run_scraper.py --mode posts --query-set expansion
+.\.venv\Scripts\python.exe -m aambridge scrape --mode posts --query-set expansion
 
-# Search both hiring and expansion post query sets
-.\.venv\Scripts\python.exe run_scraper.py --mode posts --query-set all
+# Search both hiring and expansion post query sets (needed for expansion scoring)
+.\.venv\Scripts\python.exe -m aambridge scrape --mode posts --query-set all
 ```
+
+Default `--query-set hiring` still stores posts whose body does not match
+hiring/expansion/award/leadership phrases. Those are category `other`
+(unclassified theme, not a missing industry). Expansion scoring only uses
+`expansion` and `project_award`.
 
 ## Date window (3 or 6 months)
 
@@ -256,7 +275,12 @@ production data across schema changes becomes necessary.
 Use these values with `--sectors`:
 
 `healthcare`, `green_energy`, `real_estate`,
-`construction_infrastructure`, `hospitality`, `retail`.
+`construction_infrastructure`, `hospitality`, `retail`,
+`education`, `datacenters`, `ai`.
+
+`green_energy` covers renewable energy, solar energy, solar farms, wind
+energy, and power-generation / grid language. It does not search the
+bare word `power`.
 
 ## Extract, resolve, detect signals, and score
 
@@ -275,6 +299,11 @@ In another PowerShell window, run each idempotent stage:
 .\.venv\Scripts\python.exe -m aambridge signals
 .\.venv\Scripts\python.exe -m aambridge score
 ```
+
+Scoring counts jobs observed in the last 30 days (`active_job_days` in
+`config/scoring.yaml`) and writes `LeadScore` rows on the latest completed
+scan. After a scoring change, re-run `score` on Neon to put GCC employers
+that already have jobs onto the call list — no scrape required.
 
 Or run the downstream stages together using existing database records:
 
@@ -306,30 +335,44 @@ The country/industry opportunity values in
 scores must not be treated as production-ready until those values and source
 notes are replaced with dated market research.
 
-## Decision-makers
+## Decision-makers and public contacts
 
-Phase 9 stores **manual, assisted** hiring contacts only. It does not scrape
-LinkedIn profiles and never stores emails or phone numbers. Rank titles from
-`taxonomies\designations.yaml` so partnership-control roles (Head of TA, CHRO)
-score above a generic CEO.
+Companies can rank HIGH without a named person. Listing contacts come from
+**employer-posted jobs** (company name, job URL, emails printed in the
+description). **Agency-posted jobs** drop the recruiter contact and keep
+the end-client company name when it can be parsed.
+
+Named outreach people are added when you choose a company and run Apollo
+(dashboard **Find Apollo people**, or the CLI below). Do not scrape company
+LinkedIn About/People pages or company websites.
 
 ```powershell
 # HIGH/MEDIUM companies that still need a verified contact
 .\.venv\Scripts\python.exe -m aambridge decision-maker-tasks
 
 # Add one record. Omit --verified-by until a person has confirmed the title.
-.\.venv\Scripts\python.exe -m aambridge add-decision-maker --company-id 1 --name "Aisha Rahman" --designation "Head of Talent Acquisition" --source manual --verified-by recruiter
+.\.venv\Scripts\python.exe -m aambridge add-decision-maker --company-id 1 --name "Aisha Rahman" --designation "Head of Talent Acquisition" --source manual --verified-by recruiter --email "aisha@example.com"
 
-# Import a spreadsheet. email/phone columns are ignored if present.
+# Import a spreadsheet. email/phone columns are stored when present.
 .\.venv\Scripts\python.exe -m aambridge import-decision-makers tests\fixtures\decision_makers_template.csv
 
 # List stored names, titles, ranks, and sources
 .\.venv\Scripts\python.exe -m aambridge decision-makers
+
+# Apollo people search (no credits). Uses company name and location.
+.\.venv\Scripts\python.exe -m aambridge apollo-search --company-id 1
+
+# Spend credits to reveal one stored Apollo person's work email.
+.\.venv\Scripts\python.exe -m aambridge apollo-disclose --person-id 12
 ```
 
+Set `APOLLO_API_KEY` in `.env`. Search stores names and titles only. Disclose
+reveals one work email. The company brief has the same Find / dropdown /
+Disclose flow. Phone numbers are not requested.
+
 Allowed CSV columns: `company_id`, `company_name`, `name`, `designation`,
-`department`, `profile_url`, `source`, `verified_by`, `confidence`, `notes`.
-After verified contacts are saved, re-run `score` so
+`department`, `profile_url`, `email`, `phone`, `source`, `verified_by`,
+`confidence`, `notes`. After verified contacts are saved, re-run `score` so
 `decision_maker_accessibility` uses the best relevance rank.
 
 ## Dashboard
@@ -340,26 +383,24 @@ to approach first, and why each one is on the list.
 ```powershell
 .\.venv\Scripts\python.exe -m aambridge dashboard
 .\.venv\Scripts\python.exe -m aambridge export-top-50 output\aambridge_top50.csv
-.\.venv\Scripts\python.exe -m aambridge export-top-50 output\emiratisation_top50.csv --preset emiratisation
+.\.venv\Scripts\python.exe -m aambridge export-marketing output\marketing
 ```
 
 Open `http://localhost:8501`. Pages:
 
-- **Pipeline** — Priority, company, industry, country/city, hiring activity,
-  roles, seniority, key contact, designation, score, outreach status, updated
+- **Where to focus** — country → booming sector (30-day unique jobs) → city →
+  companies to approach, plus **New requirements this scan** and first calls
+- **Companies** — ranked employers and the company brief with **Find Apollo people**
 - **Why this company** — factor bars, FACT/INFERENCE/UNKNOWN evidence, jobs,
   signals, score history, missing inputs, editable outreach status
 - **What changed** — new companies, score movements, new signals
-- **Executive summary** — totals, new prospects, accelerating companies, top
-  industries/cities, decision-makers identified
-- **Market potential** — region-by-industry and country-by-city charts. Scores
-  skip company potential, external-agency potential, and decision-maker
-  accessibility, then rescale the other factor weights to 100
+- **Market potential** — industry-first rankings (sector → region → companies),
+  plus **Download marketing pack** (aggregated CSVs for social; no people or
+  contacts). See `docs\MARKETING_REPORTS.md`.
 
-Saved views include UAE + Riyadh and the Emiratisation list (mainland UAE,
-50+ staff, nationality-restricted roles). Agencies are hidden by default.
-Outreach status values: `new`, `researching`, `contacted`, `meeting`,
-`client`, `not a fit`.
+Agencies are hidden by default. Sidebar Country / City / Industry filters
+narrow every page. Outreach status values: `new`, `researching`, `contacted`,
+`meeting`, `client`, `not a fit`.
 
 ## CLI reference
 
@@ -371,16 +412,20 @@ Outreach status values: `new`, `researching`, `contacted`, `meeting`,
 | `resolve` | Resolve companies |
 | `resolve-review` | List or accept/reject fuzzy merges |
 | `import-company-groups` | Import parent groups |
-| `import-company-overrides` | Import size/jurisdiction/industry |
+| `import-company-overrides` | Import size/jurisdiction/industry/website |
 | `signals` | Detect hiring and expansion signals |
 | `changes` | Print what changed since the previous scan |
 | `score` | Write deterministic lead scores |
 | `decision-maker-tasks` | HIGH/MEDIUM companies missing a verified contact |
-| `add-decision-maker` | Store one manual title (no email/phone flags) |
-| `import-decision-makers` | CSV import; contact columns are dropped |
-| `decision-makers` | List stored names and ranks |
+| `add-decision-maker` | Store one hiring contact; optional `--email` / `--phone` |
+| `import-decision-makers` | CSV import; email/phone columns are stored |
+| `decision-makers` | List stored names, ranks, and public contacts |
+| `apollo-search` | List Apollo people for one company (no email credits) |
+| `apollo-disclose` | Reveal one stored Apollo person's work email (paid) |
+| `enrich-contacts` | Deprecated; do not crawl company sites or LinkedIn company pages |
 | `dashboard` | Local Streamlit UI |
 | `export-top-50` | Acceptance-test Top 50 CSV |
+| `export-marketing` | Marketing-safe CSVs plus a PDF trend briefing (no people or contacts) |
 | `export-csv` | Raw jobs/posts CSV from the database |
 | `run-all` | Scrape (optional) then clean → resolve → signals → score |
 | `run_pipeline.py` | Auto scrape (if DB empty) then clean → score → export CSVs → dashboard |
@@ -417,7 +462,7 @@ by its weight, then summed and rounded.
 - LinkedIn HTML changes will break selectors; update YAML, do not add stealth.
 - Arabic extraction is rule- plus model-assisted; facts still need a quote.
 - Market-model scores are placeholders until replaced with dated research.
-- Decision-makers are typed in by people; profiles are not scraped.
+- Named people come from Apollo or a manual/CSV entry; company pages are not scraped.
 - Schema changes use `create_all` plus additive columns, not Alembic yet.
 - pandas 2.3 imports pyarrow on startup. If Windows Application Control
   blocks a pyarrow DLL, CSV helpers fail. `run_pipeline.py` and database
@@ -566,9 +611,14 @@ python -m aambridge clean output\linkedin_me_jobs.csv
 python -m aambridge clean output\linkedin_me_posts.csv
 ```
 
-### 8. Decision-makers (manual, no emails or phones)
+### 8. Decision-makers and public contacts
+
+Employer job emails are stored at resolve time. For named people, open the
+dashboard, pick a company under **New requirements this scan**, then
+**Find Apollo people**.
 
 ```powershell
+python -m aambridge apollo-search --company-id 1
 python -m aambridge decision-maker-tasks
 python -m aambridge add-decision-maker --company-id 1 --name "Aisha Rahman" --designation "Head of Talent Acquisition" --source manual --verified-by recruiter
 python -m aambridge import-decision-makers tests\fixtures\decision_makers_template.csv
@@ -576,9 +626,7 @@ python -m aambridge decision-makers
 python -m aambridge score
 ```
 
-Re-run `score` after a verified contact so accessibility uses the title rank.
-Do not put emails or phone numbers in the form or CSV; those columns are
-ignored.
+Re-run `score` after a contact is saved so accessibility uses the title rank.
 
 ### 9. Export raw jobs and posts
 
@@ -594,18 +642,22 @@ python -m aambridge dashboard
 
 Chrome or Edge: `http://localhost:8501`
 
-1. On **Pipeline**, confirm the ranked list (agencies hidden).
-2. Use the **UAE and Riyadh** or **Emiratisation** saved view if needed.
+1. On **Where to focus**, pick a country, then a sector, then a city.
+2. Open **Companies** for the ranked list (agencies hidden).
 3. Select a company and open **Why this company** to read the factor bars and
    source-dated evidence.
 4. Set outreach status (`new` → `researching` → `contacted`, and so on).
-5. Download **Export Top 50 CSV**, or from PowerShell:
+5. Download **Export Top 50 CSV** for BD, or from PowerShell:
 
    ```powershell
    python -m aambridge export-top-50 output\aambridge_top50.csv
    ```
 
-6. Check **What changed** and **Executive summary**.
+6. On **Market potential**, download the PDF report (charts) or the marketing
+   pack (PDF plus CSVs), or `python -m aambridge export-marketing output\marketing`.
+   See `docs\MARKETING_REPORTS.md`.
+
+7. Check **What changed**.
 
 ### 11. Verify the local install (Phase 11)
 
@@ -624,7 +676,8 @@ Local artefacts:
 | `logs\aambridge.log` | Rotating runtime log |
 | `output\linkedin_me_jobs.csv` | Jobs export |
 | `output\linkedin_me_posts.csv` | Posts export |
-| `output\aambridge_top50.csv` | Ranked outreach list |
+| `output\aambridge_top50.csv` | Ranked outreach list (BD only) |
+| `output\marketing\` | Social-safe marketing pack (`docs\MARKETING_REPORTS.md`) |
 | `.venv\` | Isolated Python environment |
 
 To wipe the local database and start again:

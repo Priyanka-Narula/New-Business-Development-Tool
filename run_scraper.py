@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parent
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Collect KSA/UAE recruitment market signals from LinkedIn."
+        description="Collect recruitment market signals from LinkedIn."
     )
     parser.add_argument(
         "--mode", choices=("posts", "jobs", "both"), default="both"
@@ -56,7 +56,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--gcc",
         action="store_true",
-        help="Also search Qatar, Bahrain, Oman, and Kuwait.",
+        help="Also search Bahrain, Oman, and Kuwait.",
     )
     parser.add_argument(
         "--descriptions",

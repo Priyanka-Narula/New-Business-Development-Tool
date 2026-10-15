@@ -239,6 +239,22 @@ class Evidence(Base):
     basis: Mapped[str] = mapped_column(String(16))
 
 
+class CompanyContact(Base):
+    __tablename__ = "company_contact"
+    __table_args__ = (UniqueConstraint("company_id", "kind", "value_normalised"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("company.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    value: Mapped[str] = mapped_column(String(1000))
+    value_normalised: Mapped[str] = mapped_column(String(1000))
+    label: Mapped[str | None] = mapped_column(String(64))
+    source_url: Mapped[str | None] = mapped_column(String(2000))
+    source: Mapped[str] = mapped_column(String(64))
+    is_organizational: Mapped[bool] = mapped_column(Boolean, default=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class DecisionMaker(Base):
     __tablename__ = "decision_maker"
 
@@ -249,11 +265,16 @@ class DecisionMaker(Base):
     department: Mapped[str | None] = mapped_column(String(255))
     relevance_rank: Mapped[int] = mapped_column(Integer)
     profile_url: Mapped[str | None] = mapped_column(String(2000))
+    email: Mapped[str | None] = mapped_column(String(320))
+    phone: Mapped[str | None] = mapped_column(String(64))
     source: Mapped[str] = mapped_column(String(255))
     verified_by: Mapped[str | None] = mapped_column(String(255))
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     confidence: Mapped[float | None] = mapped_column(Float)
     notes: Mapped[str | None] = mapped_column(Text)
+    apollo_person_id: Mapped[str | None] = mapped_column(String(64), unique=True)
+    email_status: Mapped[str | None] = mapped_column(String(64))
+    disclosed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class LeadScore(Base):

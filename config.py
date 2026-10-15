@@ -25,8 +25,14 @@ SECTOR_KEYWORDS = {
         "clinical operations", "pharmaceutical",
     ),
     "green_energy": (
-        "renewable energy", "solar energy", "wind energy",
-        "sustainability", "clean energy",
+        "renewable energy", "solar energy", "solar farm",
+        "solar", "solar PV", "photovoltaic",
+        "BESS", "battery energy storage", "wind energy",
+        "power generation", "power plant", "power systems",
+        "electrical power", "transmission", "grid connection",
+        "substation", "switchyard", "inverter",
+        "PCS", "solar engineer", "BESS engineer",
+        "electrical design", "PV",
     ),
     "real_estate": (
         "real estate", "property development", "asset management",
@@ -43,6 +49,18 @@ SECTOR_KEYWORDS = {
     "retail": (
         "retail", "store operations", "category management",
         "merchandising", "e-commerce",
+    ),
+    "education": (
+        "international school", "school principal", "head of school",
+        "academic director", "K-12",
+    ),
+    "datacenters": (
+        "data center", "data centre", "colocation",
+        "hyperscale", "data hall",
+    ),
+    "ai": (
+        "artificial intelligence", "machine learning", "AI engineer",
+        "LLM", "MLOps",
     ),
 }
 
@@ -68,10 +86,35 @@ PRIMARY_LOCATIONS = {
         "United Arab Emirates", "UAE", "Dubai", "Abu Dhabi", "Sharjah",
         "الإمارات", "الإمارات العربية المتحدة", "دبي", "أبو ظبي", "الشارقة",
     ),
+    "Qatar": ("Qatar", "Doha", "قطر", "الدوحة"),
+    "Malaysia": (
+        "Malaysia", "Kuala Lumpur", "Selangor", "Penang", "Johor Bahru",
+        "Cyberjaya",
+    ),
+    "Australia": (
+        "Australia", "Sydney", "Melbourne", "Brisbane", "Perth", "Adelaide",
+        "Canberra",
+    ),
+    "United Kingdom": (
+        "United Kingdom", "UK", "London", "Manchester", "Birmingham",
+        "Edinburgh", "Glasgow",
+    ),
+    "Germany": (
+        "Germany", "Berlin", "Munich", "Frankfurt", "Hamburg", "Cologne",
+        "Stuttgart", "Düsseldorf",
+    ),
+    "Canada": (
+        "Canada", "Toronto", "Vancouver", "Montreal", "Calgary", "Ottawa",
+        "Edmonton",
+    ),
+    "United States": (
+        "United States", "USA", "US", "United States of America",
+        "New York", "San Francisco", "Los Angeles", "Chicago", "Houston",
+        "Dallas", "Seattle", "Austin", "Boston", "Washington DC",
+    ),
 }
 
 OTHER_GCC_LOCATIONS = {
-    "Qatar": ("Qatar", "Doha", "قطر", "الدوحة"),
     "Bahrain": ("Bahrain", "Manama", "البحرين", "المنامة"),
     "Oman": ("Oman", "Muscat", "عمان", "مسقط"),
     "Kuwait": ("Kuwait", "Kuwait City", "الكويت", "مدينة الكويت"),
@@ -83,6 +126,23 @@ TIME_FILTER_CODES = {
     "week": "r604800",
     "month": "r2592000",
 }
+
+
+def _format_search_term(term: str) -> str:
+    """Quote multi-word phrases only so short tokens still match job titles."""
+
+    return f'"{term}"' if " " in term else term
+
+
+def _keyword_groups(keywords: tuple[str, ...]) -> tuple[str, ...]:
+    """Keep each LinkedIn Boolean group to three terms."""
+
+    groups: list[str] = []
+    for start in range(0, len(keywords), 3):
+        chunk = keywords[start : start + 3]
+        if chunk:
+            groups.append(" OR ".join(_format_search_term(term) for term in chunk))
+    return tuple(groups)
 
 
 def normalize_sectors(sectors: list[str] | None) -> list[str]:
@@ -111,14 +171,8 @@ def build_search_specs(
     specs: list[SearchSpec] = []
     for sector in selected:
         keywords = SECTOR_KEYWORDS[sector]
-        # Two broad domain searches per country cover the vocabulary without
-        # creating hundreds of LinkedIn requests.
-        keyword_groups = (
-            " OR ".join(f'"{term}"' for term in keywords[:3]),
-            " OR ".join(f'"{term}"' for term in keywords[3:]),
-        )
         for country in locations:
-            for group in keyword_groups:
+            for group in _keyword_groups(keywords):
                 if group:
                     specs.append(
                         SearchSpec(
@@ -166,7 +220,7 @@ def build_post_search_specs(
     expansion: list[SearchSpec] = []
     for sector in selected:
         industry_group = " OR ".join(
-            f'"{term}"' for term in SECTOR_KEYWORDS[sector][:3]
+            _format_search_term(term) for term in SECTOR_KEYWORDS[sector][:3]
         )
         for country in locations:
             expansion.append(

@@ -320,6 +320,7 @@ def test_reset_recreates_schema_and_postgresql_url_is_supported(tmp_path) -> Non
         "signal",
         "evidence",
         "decision_maker",
+        "company_contact",
         "lead_score",
     } <= set(inspect(engine).get_table_names())
 

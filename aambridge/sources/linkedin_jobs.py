@@ -20,6 +20,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from aambridge.sources.base import NormalisedRecord
 from aambridge.privacy import privacy_safe, redact_personal_contacts
+from aambridge.sources.stale import parse_indexed_card
 from config import SearchSpec, TIME_FILTER_CODES
 from scraper_common import (
     clean_text,
@@ -314,6 +315,9 @@ def detect_nationality_restriction(text: str) -> tuple[bool, str]:
 
 
 def detect_end_client_hint(text: str) -> dict[str, str]:
+    from aambridge.contacts.listing import parse_end_client_name
+
+    company_name = parse_end_client_name(text)
     for phrase in _job_config().get("end_client_phrases", []):
         match = re.search(re.escape(str(phrase)), text, re.IGNORECASE)
         if match:
@@ -321,10 +325,18 @@ def detect_end_client_hint(text: str) -> dict[str, str]:
             snippet = re.split(r"(?<=[.!?])\s", tail, maxsplit=1)[0]
             return {
                 "value": snippet,
+                "company_name": company_name,
                 "evidence": match.group(0),
                 "basis": "inference",
             }
-    return {"value": "", "evidence": "", "basis": "unknown"}
+    if company_name:
+        return {
+            "value": company_name,
+            "company_name": company_name,
+            "evidence": company_name,
+            "basis": "inference",
+        }
+    return {"value": "", "company_name": "", "evidence": "", "basis": "unknown"}
 
 
 def _alias_match(text: str, alias: str) -> bool:
@@ -610,23 +622,30 @@ class LinkedInJobsAdapter:
                     break
 
                 new_on_page = 0
-                for card in cards:
+                page_cards = cards
+                for index in range(len(page_cards)):
                     if accepted >= self.max_per_query:
                         break
                     observed_at = datetime.now(UTC)
                     try:
-                        lead = _parse_card(
-                            self.driver,
-                            card,
-                            spec,
-                            self.include_gcc,
-                            self.include_description,
-                            self.progress,
-                            observed_at,
+                        lead = parse_indexed_card(
+                            cards=page_cards,
+                            index=index,
+                            refetch=lambda: _job_cards(self.driver),
+                            parse=lambda card: _parse_card(
+                                self.driver,
+                                card,
+                                spec,
+                                self.include_gcc,
+                                self.include_description,
+                                self.progress,
+                                observed_at,
+                            ),
                         )
                     except StaleElementReferenceException:
                         if self.progress is not None:
                             self.progress.parse_failure("job.card.stale")
+                        log.info("Gave up on stale job card at index %s", index)
                         continue
                     if not lead:
                         continue

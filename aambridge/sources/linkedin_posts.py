@@ -21,6 +21,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from aambridge.privacy import has_contact_email, redact_personal_contacts
 from aambridge.sources.base import NormalisedRecord
 from aambridge.sources.linkedin_jobs import detect_agency, parse_relative_date
+from aambridge.sources.stale import parse_indexed_card
 from config import SearchSpec
 from scraper_common import (
     canonical_source_key,
@@ -342,21 +343,28 @@ class LinkedInPostsAdapter:
                     if self.progress is not None:
                         self.progress.parse_failure("post.card")
                     log.warning("No post cards detected at %s", self.driver.current_url)
-                for card in cards:
+                page_cards = cards
+                for index in range(len(page_cards)):
                     if accepted >= self.max_per_query:
                         break
                     observed_at = datetime.now(UTC)
                     try:
-                        lead = _parse_card(
-                            card,
-                            spec,
-                            self.include_gcc,
-                            self.progress,
-                            observed_at,
+                        lead = parse_indexed_card(
+                            cards=page_cards,
+                            index=index,
+                            refetch=lambda: _containers(self.driver),
+                            parse=lambda card: _parse_card(
+                                card,
+                                spec,
+                                self.include_gcc,
+                                self.progress,
+                                observed_at,
+                            ),
                         )
                     except StaleElementReferenceException:
                         if self.progress is not None:
                             self.progress.parse_failure("post.card.stale")
+                        log.info("Gave up on stale post card at index %s", index)
                         continue
                     if not lead:
                         continue

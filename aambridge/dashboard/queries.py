@@ -4,29 +4,33 @@ from __future__ import annotations
 
 import csv
 import io
-import re
 from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
+from aambridge.contacts.enrich import best_organizational_channel
 from aambridge.db.models import (
     Company,
+    CompanyContact,
     DecisionMaker,
     Evidence,
     Job,
     LeadScore,
     Post,
+    ScanRun,
     Signal,
     SourceRecord,
 )
 from aambridge.extract.taxonomies import load_yaml
-from aambridge.privacy import privacy_safe, redact_personal_contacts
+from aambridge.privacy import redact_personal_contacts
 from aambridge.scoring.bands import market_score
 from aambridge.signals.detect import _scan_ids, _seniority, what_changed
+from config import SECTOR_KEYWORDS
 
 OUTREACH_STATUSES = (
     "new",
@@ -39,6 +43,7 @@ OUTREACH_STATUSES = (
 TABLE_COLUMNS = (
     "priority",
     "company",
+    "website",
     "industry",
     "country_city",
     "hiring_activity",
@@ -46,20 +51,32 @@ TABLE_COLUMNS = (
     "seniority",
     "key_contact",
     "designation",
+    "company_phone",
+    "company_email",
     "lead_score",
     "status",
     "last_updated",
 )
-UAE_NAMES = {"united arab emirates", "uae"}
 BAND_ORDER = {"High": 0, "Medium": 1, "Low": 2}
 FIRST_CALL_STATUSES = frozenset({"new", "researching"})
 GRAPH_EXCLUDED_FACTORS = frozenset(
     {
-        "company_potential",
         "external_agency_potential",
         "decision_maker_accessibility",
     }
 )
+MARKET_INSIGHT_EXCLUDED_FACTORS = GRAPH_EXCLUDED_FACTORS | {"aambridge_fit"}
+ROLLING_DAYS = 30
+PULSE_DAYS = 15
+EMPTY_SCAN_HINT = (
+    "To get new insights, run a fresh scan (`python -m aambridge scrape`)."
+)
+SEARCH_SECTORS = tuple(SECTOR_KEYWORDS)
+TAXONOMY_TO_SECTOR = {
+    "renewable_energy": "green_energy",
+    "hospitality_tourism": "hospitality",
+    "ai_data": "ai",
+}
 
 
 @dataclass(frozen=True)
@@ -70,12 +87,10 @@ class PipelineFilters:
     industries: tuple[str, ...] = ()
     seniorities: tuple[str, ...] = ()
     hiring_bands: tuple[str, ...] = ()
-    size_bands: tuple[str, ...] = ()
     score_min: int = 0
     score_max: int = 100
     outreach_statuses: tuple[str, ...] = ()
     hide_agencies: bool = True
-    preset: str | None = None
     limit: int | None = None
     acquisition_bands: tuple[str, ...] = ()
 
@@ -89,6 +104,7 @@ class _JobSummary:
     cities: list[str] = field(default_factory=list)
     active_count: int = 0
     nationality_restricted: bool = False
+    new_this_scan: bool = False
     rows: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -100,14 +116,235 @@ def hiring_band(score_0_100: float) -> str:
     return "low"
 
 
-def size_at_least_50(size_band: str | None) -> bool:
-    match = re.match(r"(\d+)", size_band or "")
-    return bool(match and int(match.group(1)) >= 50)
-
-
 def _latest_scan(session: Session) -> int | None:
     scans = _scan_ids(session)
     return scans[-1] if scans else None
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+
+def _normalise_sector(value: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    if text in SECTOR_KEYWORDS:
+        return text
+    return TAXONOMY_TO_SECTOR.get(text, text)
+
+
+def _job_sector(company: Company | None, raw: dict[str, Any]) -> str:
+    if company is not None:
+        from_company = _normalise_sector(company.industry_key or "")
+        if from_company:
+            return from_company
+    return _normalise_sector(str(raw.get("industry") or ""))
+
+
+def rolling_hiring(
+    session_factory: sessionmaker[Session],
+    *,
+    days: int = ROLLING_DAYS,
+    countries: tuple[str, ...] = (),
+    regions: tuple[str, ...] = (),
+    cities: tuple[str, ...] = (),
+    industries: tuple[str, ...] = (),
+    hide_agencies: bool = True,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """One row per unique job observed in the rolling window."""
+
+    cutoff = (now or datetime.now(UTC)) - timedelta(days=days)
+    with session_factory() as session:
+        jobs = list(
+            session.scalars(select(Job).options(selectinload(Job.observations)))
+        )
+        companies = {
+            company.id: company for company in session.scalars(select(Company))
+        }
+    facts: list[dict[str, Any]] = []
+    for job in jobs:
+        windowed = [
+            item
+            for item in job.observations
+            if _aware(item.observed_at) >= cutoff
+        ]
+        if not windowed:
+            continue
+        company = companies.get(job.company_id) if job.company_id else None
+        if hide_agencies and company is not None and company.is_agency:
+            continue
+        latest = max(windowed, key=lambda item: _aware(item.observed_at))
+        raw = latest.raw_listing_json or {}
+        industry = _job_sector(company, raw)
+        country = job.country or ""
+        region = job.region or ""
+        city = job.city or ""
+        if countries and country not in countries:
+            continue
+        if regions and region not in regions:
+            continue
+        if cities and city not in cities:
+            continue
+        if industries and industry not in industries:
+            continue
+        facts.append(
+            {
+                "job_id": job.id,
+                "company_id": job.company_id,
+                "title": job.title,
+                "seniority": _seniority(
+                    " ".join(
+                        filter(
+                            None,
+                            [
+                                job.title,
+                                str(raw.get("seniority_hint") or ""),
+                                str(raw.get("job_description") or ""),
+                                str(raw.get("description") or ""),
+                            ],
+                        )
+                    )
+                ),
+                "industry": industry,
+                "country": country,
+                "region": region,
+                "city": city,
+                "is_agency": bool(company is not None and company.is_agency),
+            }
+        )
+    return facts
+
+
+def _chart_row(label_key: str, name: str, job_ids: set[int], company_ids: set[int]) -> dict[str, Any]:
+    job_count = len(job_ids)
+    return {
+        label_key: name,
+        "job_count": job_count,
+        "company_count": len(company_ids),
+        "market_score": job_count,
+        "high": 0,
+        "medium": 0,
+        "low": 0,
+    }
+
+
+def latest_completed_scan(
+    session_factory: sessionmaker[Session],
+) -> dict[str, Any] | None:
+    """Finished_at (or started_at) of the newest completed scan."""
+
+    with session_factory() as session:
+        run = session.scalar(
+            select(ScanRun)
+            .where(ScanRun.status == "completed")
+            .order_by(ScanRun.started_at.desc())
+        )
+    if run is None:
+        return None
+    when = run.finished_at or run.started_at
+    return {
+        "id": run.id,
+        "finished_at": when,
+        "label": when.strftime("%d %b %Y") if when else "",
+    }
+
+
+def rolling_industry_chart(
+    facts: Sequence[dict[str, Any]],
+    *,
+    fill_missing: bool = False,
+) -> dict[str, Any]:
+    grouped: dict[str, tuple[set[int], set[int]]] = defaultdict(lambda: (set(), set()))
+    for fact in facts:
+        industry = str(fact.get("industry") or "")
+        jobs, companies = grouped[industry]
+        jobs.add(int(fact["job_id"]))
+        if fact.get("company_id"):
+            companies.add(int(fact["company_id"]))
+    names = list(SEARCH_SECTORS) if fill_missing else [
+        name for name in grouped if name
+    ]
+    extra = [name for name in grouped if name and name not in names]
+    rankings = [
+        _chart_row("industry", name, *grouped[name])
+        for name in [*names, *sorted(extra)]
+    ]
+    rankings.sort(key=lambda item: (-int(item["job_count"]), str(item["industry"])))
+    rankings = [item for item in rankings if int(item["job_count"]) > 0]
+    return {"rankings": rankings, "excluded": 0}
+
+
+def rolling_country_chart(facts: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    grouped: dict[str, tuple[set[int], set[int]]] = defaultdict(lambda: (set(), set()))
+    for fact in facts:
+        country = str(fact.get("country") or "")
+        if not country:
+            continue
+        jobs, companies = grouped[country]
+        jobs.add(int(fact["job_id"]))
+        if fact.get("company_id"):
+            companies.add(int(fact["company_id"]))
+    rankings = [
+        _chart_row("country", name, jobs, companies)
+        for name, (jobs, companies) in grouped.items()
+    ]
+    rankings.sort(key=lambda item: (-int(item["job_count"]), str(item["country"])))
+    return {"rankings": rankings, "excluded": 0}
+
+
+def rolling_city_chart(
+    facts: Sequence[dict[str, Any]],
+    *,
+    country: str,
+    industry: str,
+) -> dict[str, Any]:
+    grouped: dict[str, tuple[set[int], set[int]]] = defaultdict(lambda: (set(), set()))
+    for fact in facts:
+        if fact.get("country") != country or fact.get("industry") != industry:
+            continue
+        city = str(fact.get("city") or "")
+        if not city:
+            continue
+        jobs, companies = grouped[city]
+        jobs.add(int(fact["job_id"]))
+        if fact.get("company_id"):
+            companies.add(int(fact["company_id"]))
+    rankings = [
+        _chart_row("city", name, jobs, companies)
+        for name, (jobs, companies) in grouped.items()
+    ]
+    rankings.sort(key=lambda item: (-int(item["job_count"]), str(item["city"])))
+    return {
+        "rankings": rankings,
+        "excluded": 0,
+        "country": country,
+        "industry": industry,
+    }
+
+
+def rolling_region_chart(
+    facts: Sequence[dict[str, Any]],
+    industry: str,
+) -> dict[str, Any]:
+    grouped: dict[str, tuple[set[int], set[int]]] = defaultdict(lambda: (set(), set()))
+    for fact in facts:
+        if fact.get("industry") != industry:
+            continue
+        region = str(fact.get("region") or fact.get("city") or "")
+        if not region:
+            continue
+        jobs, companies = grouped[region]
+        jobs.add(int(fact["job_id"]))
+        if fact.get("company_id"):
+            companies.add(int(fact["company_id"]))
+    rankings = [
+        _chart_row("region", name, jobs, companies)
+        for name, (jobs, companies) in grouped.items()
+    ]
+    rankings.sort(key=lambda item: (-int(item["job_count"]), str(item["region"])))
+    return {"rankings": rankings, "excluded": 0, "industry": industry}
 
 
 def _mode(values: list[str]) -> str:
@@ -140,6 +377,73 @@ def _contacts_by_company(
     return found
 
 
+def _channels_by_company(
+    session: Session,
+    company_ids: Sequence[int],
+) -> dict[int, list[CompanyContact]]:
+    grouped: dict[int, list[CompanyContact]] = defaultdict(list)
+    if not company_ids:
+        return grouped
+    for item in session.scalars(
+        select(CompanyContact)
+        .where(CompanyContact.company_id.in_(company_ids))
+        .order_by(CompanyContact.id)
+    ):
+        grouped[item.company_id].append(item)
+    return grouped
+
+
+def _people_by_company(
+    session: Session,
+    company_ids: Sequence[int],
+) -> dict[int, list[DecisionMaker]]:
+    grouped: dict[int, list[DecisionMaker]] = defaultdict(list)
+    if not company_ids:
+        return grouped
+    for item in session.scalars(
+        select(DecisionMaker)
+        .where(DecisionMaker.company_id.in_(company_ids))
+        .order_by(
+            DecisionMaker.verified_at.is_(None),
+            DecisionMaker.relevance_rank,
+            DecisionMaker.id,
+        )
+    ):
+        grouped[item.company_id].append(item)
+    return grouped
+
+
+def _channel_payload(item: CompanyContact) -> dict[str, Any]:
+    return {
+        "kind": item.kind,
+        "value": item.value,
+        "label": item.label or "",
+        "source": item.source,
+        "source_url": item.source_url or "",
+        "is_organizational": item.is_organizational,
+    }
+
+
+def _person_payload(item: DecisionMaker) -> dict[str, Any]:
+    location = ""
+    if item.source == "apollo":
+        location = (item.notes or "").strip()
+    return {
+        "id": item.id,
+        "name": item.name,
+        "designation": item.designation,
+        "email": item.email or "",
+        "phone": item.phone or "",
+        "profile_url": item.profile_url or "",
+        "source": item.source,
+        "verified": item.verified_at is not None,
+        "apollo_person_id": item.apollo_person_id or "",
+        "email_status": item.email_status or "",
+        "disclosed": item.disclosed_at is not None,
+        "location": location,
+    }
+
+
 def _jobs_by_company(
     session: Session,
     company_ids: Sequence[int],
@@ -170,6 +474,8 @@ def _job_summary_from_jobs(jobs: Sequence[Job]) -> _JobSummary:
         level = _seniority(" ".join(filter(None, [job.title, raw.get("job_description", "")])))
         if job.is_active:
             summary.active_count += 1
+            if len(job.observations) <= 1:
+                summary.new_this_scan = True
             summary.titles.append(job.title)
             summary.seniorities.append(level)
             if job.country:
@@ -204,11 +510,24 @@ def _factor_score(score: LeadScore, name: str) -> float:
 def graph_potential(factor_results: dict[str, Any] | None) -> int:
     """0-100 score from kept factors, with their weights rescaled to 100."""
 
+    return _rescaled_score(factor_results, GRAPH_EXCLUDED_FACTORS)
+
+
+def market_insight(factor_results: dict[str, Any] | None) -> int:
+    """0-100 market score: hiring, industry opportunity, and seniority only."""
+
+    return _rescaled_score(factor_results, MARKET_INSIGHT_EXCLUDED_FACTORS)
+
+
+def _rescaled_score(
+    factor_results: dict[str, Any] | None,
+    excluded: frozenset[str],
+) -> int:
     weights = load_yaml("config/scoring.yaml")["weights"]
     kept = {
         name: float(weight)
         for name, weight in weights.items()
-        if name not in GRAPH_EXCLUDED_FACTORS
+        if name not in excluded
     }
     total_weight = sum(kept.values())
     if not total_weight:
@@ -226,6 +545,7 @@ def _pipeline_row(
     score: LeadScore,
     jobs: _JobSummary,
     contact: DecisionMaker | None,
+    channels: Sequence[CompanyContact] = (),
 ) -> dict[str, Any]:
     country = company.hq_country or _mode(jobs.countries)
     city = _mode(jobs.cities)
@@ -241,22 +561,29 @@ def _pipeline_row(
         "country_city": ", ".join(part for part in (city, country) if part),
         "hiring_activity": hiring_band(activity),
         "hiring_activity_score": activity,
+        "industry_opportunity_score": _factor_score(score, "industry_opportunity"),
+        "seniority_match_score": _factor_score(score, "seniority_match"),
         "hiring_activity_label": f"{hiring_band(activity)} ({jobs.active_count} jobs)",
         "roles_hiring": "; ".join(jobs.titles[:5]),
         "seniority": _mode(jobs.seniorities) or "unknown",
         "seniorities": tuple(sorted(set(jobs.seniorities))),
+        "website": company.website or "",
         "key_contact": contact.name if contact else "",
         "designation": contact.designation if contact else "",
+        "company_phone": best_organizational_channel(channels, "phone"),
+        "company_email": best_organizational_channel(channels, "email"),
         "lead_score": score.total_score,
         "lead_score_percentile": company.lead_score_percentile,
         "acquisition_band": company.acquisition_band or "",
         "graph_potential": graph_potential(score.factor_results_json),
+        "market_insight": market_insight(score.factor_results_json),
         "status": company.outreach_status or "new",
         "last_updated": score.created_at.isoformat() if score.created_at else "",
         "size_band": company.size_band or "",
         "jurisdiction": company.jurisdiction or "unknown",
         "is_agency": company.is_agency,
         "nationality_restricted": jobs.nationality_restricted,
+        "new_requirement": jobs.new_this_scan,
         "explanation": score.explanation_text,
     }
 
@@ -278,27 +605,10 @@ def _matches(row: dict[str, Any], filters: PipelineFilters) -> bool:
         return False
     if filters.hiring_bands and row["hiring_activity"] not in filters.hiring_bands:
         return False
-    if filters.size_bands and row["size_band"] not in filters.size_bands:
-        return False
     if filters.outreach_statuses and row["status"] not in filters.outreach_statuses:
         return False
     if filters.acquisition_bands and row.get("acquisition_band") not in filters.acquisition_bands:
         return False
-    if filters.preset == "uae_riyadh":
-        country = str(row["country"]).casefold()
-        city = str(row["city"]).casefold()
-        if country not in UAE_NAMES and city != "riyadh":
-            return False
-    if filters.preset == "emiratisation":
-        country = str(row["country"]).casefold()
-        if country not in UAE_NAMES:
-            return False
-        if row["jurisdiction"] != "mainland":
-            return False
-        if not size_at_least_50(row["size_band"]):
-            return False
-        if not row["nationality_restricted"]:
-            return False
     return True
 
 
@@ -323,6 +633,7 @@ def pipeline_rows(
         } if company_ids else {}
         jobs_by_company = _jobs_by_company(session, company_ids)
         contacts = _contacts_by_company(session, company_ids)
+        channels = _channels_by_company(session, company_ids)
         rows: list[dict[str, Any]] = []
         for score in scores:
             company = companies.get(score.company_id)
@@ -334,6 +645,7 @@ def pipeline_rows(
                     score,
                     _job_summary_from_jobs(jobs_by_company.get(company.id, [])),
                     contacts.get(company.id),
+                    channels.get(company.id, []),
                 )
             )
         rows.sort(
@@ -372,7 +684,6 @@ def filter_options_from_rows(rows: list[dict[str, Any]]) -> dict[str, list[str]]
         "industries": unique("industry"),
         "seniorities": seniorities,
         "hiring_bands": ["high", "medium", "low"],
-        "size_bands": unique("size_band"),
         "outreach_statuses": list(OUTREACH_STATUSES),
         "acquisition_bands": ["High", "Medium", "Low"],
     }
@@ -517,6 +828,8 @@ def company_detail(
                 )
             factors.sort(key=lambda item: item["score_0_100"], reverse=True)
         contact = _contact(session, company_id)
+        channels = _channels_by_company(session, (company_id,)).get(company_id, [])
+        people = _people_by_company(session, (company_id,)).get(company_id, [])
         return {
             "company_id": company.id,
             "company": company.canonical_name,
@@ -545,8 +858,13 @@ def company_detail(
                 }
                 for item in scores
             ],
+            "website": company.website or "",
             "key_contact": contact.name if contact else "",
             "designation": contact.designation if contact else "",
+            "company_phone": best_organizational_channel(channels, "phone"),
+            "company_email": best_organizational_channel(channels, "email"),
+            "public_contacts": [_channel_payload(item) for item in channels],
+            "people": [_person_payload(item) for item in people],
         }
 
 
@@ -742,12 +1060,10 @@ def export_top50_rows(
             industries=chosen.industries,
             seniorities=chosen.seniorities,
             hiring_bands=chosen.hiring_bands,
-            size_bands=chosen.size_bands,
             score_min=chosen.score_min,
             score_max=chosen.score_max,
             outreach_statuses=chosen.outreach_statuses,
             hide_agencies=chosen.hide_agencies,
-            preset=chosen.preset,
             limit=50,
             acquisition_bands=chosen.acquisition_bands,
         )
@@ -762,24 +1078,26 @@ def export_top50_rows(
             f"{item['basis']} {item['quoted_text'][:120]}"
             for item in evidence_map.get(row["company_id"], [])
         )
+        safe_evidence = redact_personal_contacts(evidence)
         exported.append(
-            privacy_safe(
-                {
-                    "priority": row["priority"],
-                    "company": row["company"],
-                    "industry": row["industry"],
-                    "country_city": row["country_city"],
-                    "hiring_activity": row["hiring_activity_label"],
-                    "roles_hiring": row["roles_hiring"],
-                    "seniority": row["seniority"],
-                    "key_contact": row["key_contact"],
-                    "designation": row["designation"],
-                    "lead_score": str(row["lead_score"]),
-                    "status": row["status"],
-                    "last_updated": row["last_updated"],
-                    "evidence_summary": evidence,
-                }
-            )
+            {
+                "priority": row["priority"],
+                "company": row["company"],
+                "website": row.get("website") or "",
+                "industry": row["industry"],
+                "country_city": row["country_city"],
+                "hiring_activity": row["hiring_activity_label"],
+                "roles_hiring": row["roles_hiring"],
+                "seniority": row["seniority"],
+                "key_contact": row["key_contact"],
+                "designation": row["designation"],
+                "company_phone": row.get("company_phone") or "",
+                "company_email": row.get("company_email") or "",
+                "lead_score": str(row["lead_score"]),
+                "status": row["status"],
+                "last_updated": row["last_updated"],
+                "evidence_summary": safe_evidence,
+            }
         )
     return exported
 

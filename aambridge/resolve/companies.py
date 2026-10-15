@@ -213,6 +213,8 @@ def _field(payload: dict[str, Any], name: str) -> Any:
 
 
 def resolve_all(session_factory: sessionmaker[Session]) -> dict[str, int]:
+    from aambridge.contacts.listing import persist_job_listing_contacts
+
     stats = {"jobs": 0, "posts": 0, "companies_created": 0}
     with session_factory.begin() as session:
         before = len(list(session.scalars(select(Company))))
@@ -223,15 +225,48 @@ def resolve_all(session_factory: sessionmaker[Session]) -> dict[str, int]:
             is_agency = bool(raw.get("posted_by_agency"))
             if not is_agency:
                 is_agency, _evidence = detect_agency(job.company_name_raw)
-            company = resolve_company(
-                session,
-                name=job.company_name_raw,
-                linkedin_url=job.company_linkedin_url or "",
-                country=job.country or "",
-                industry=str(raw.get("industry") or ""),
-                is_agency=is_agency,
-                source="linkedin_job",
-            )
+            hint = raw.get("end_client_hint") if isinstance(raw.get("end_client_hint"), dict) else {}
+            end_client_name = str(
+                raw.get("end_client_name") or hint.get("company_name") or ""
+            ).strip()
+            if is_agency and end_client_name:
+                company = resolve_company(
+                    session,
+                    name=end_client_name,
+                    linkedin_url="",
+                    country=job.country or "",
+                    industry=str(raw.get("industry") or ""),
+                    is_agency=False,
+                    source="linkedin_job",
+                )
+                if company is not None:
+                    persist_job_listing_contacts(
+                        session, company, job, raw, save_emails=False
+                    )
+            elif is_agency:
+                company = resolve_company(
+                    session,
+                    name=job.company_name_raw,
+                    linkedin_url=job.company_linkedin_url or "",
+                    country=job.country or "",
+                    industry=str(raw.get("industry") or ""),
+                    is_agency=True,
+                    source="linkedin_job",
+                )
+            else:
+                company = resolve_company(
+                    session,
+                    name=job.company_name_raw,
+                    linkedin_url=job.company_linkedin_url or "",
+                    country=job.country or "",
+                    industry=str(raw.get("industry") or ""),
+                    is_agency=False,
+                    source="linkedin_job",
+                )
+                if company is not None:
+                    persist_job_listing_contacts(
+                        session, company, job, raw, save_emails=True
+                    )
             if company is not None:
                 job.company_id = company.id
                 stats["jobs"] += 1
@@ -385,7 +420,7 @@ def import_company_overrides(
     path: Path,
 ) -> int:
     count = 0
-    allowed = {"size_band", "jurisdiction", "hq_country", "industry_key"}
+    allowed = {"size_band", "jurisdiction", "hq_country", "industry_key", "website"}
     with path.open(encoding="utf-8-sig", newline="") as handle:
         rows = list(csv.DictReader(handle))
     with session_factory.begin() as session:

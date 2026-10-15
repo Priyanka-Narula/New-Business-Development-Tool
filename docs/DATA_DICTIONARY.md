@@ -1,8 +1,9 @@
 # AAMBRIDGE data dictionary
 
 Default store is local SQLite (`aambridge.db`). Set `DATABASE_URL` to use the
-shared Neon Postgres database. Personal emails and phone numbers are
-not stored in any column.
+shared Neon Postgres database. Emails and phone numbers from raw LinkedIn
+jobs and posts are still redacted. Public company channels and optional
+decision-maker email/phone collected from official websites are stored.
 
 ## scan_run
 
@@ -31,10 +32,10 @@ not stored in any column.
 | canonical_name | string | Resolved English name |
 | canonical_name_ar | string | Optional Arabic name |
 | linkedin_url | string | Unique company LinkedIn URL when known |
-| website | string | Company website if supplied by an override |
+| website | string | Official website from a CSV override if provided |
 | industry_key | string | Taxonomy industry key |
 | hq_country | string | Headquarters country |
-| size_band | string | Headcount band, for example `50-249` |
+| size_band | string | Headcount band, for example `50-249`. Stored and CSV-overridable; not used in scoring |
 | jurisdiction | string | `mainland`, `free_zone`, or `unknown` |
 | is_agency | boolean | True when the company is a recruitment agency |
 | outreach_status | string | `new`, `researching`, `contacted`, `meeting`, `client`, or `not a fit` |
@@ -131,7 +132,7 @@ not stored in any column.
 | text | text | Redacted post body |
 | post_date | date | Parsed post date |
 | post_date_precision | string | Date precision |
-| post_category | string | `hiring`, `expansion`, `project_award`, `leadership_change`, or `other` |
+| post_category | string | `hiring`, `expansion`, `project_award`, `leadership_change`, or `other`. `other` means unclassified theme (body lacked those phrases), not a missing industry. Expansion scoring uses only `expansion` / `project_award` |
 | first_seen_at | datetime | First stored |
 | last_seen_at | datetime | Last seen |
 
@@ -187,22 +188,42 @@ not stored in any column.
 | observed_at | datetime | Source observation time |
 | basis | string | `fact`, `inference`, or `unknown` |
 
+## company_contact
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| id | integer | Primary key |
+| company_id | integer | Employer |
+| kind | string | `phone`, `email`, `address`, or `page_url` |
+| value | string | Public channel as printed on the company site |
+| value_normalised | string | Dedup key (casefolded email, digits-only phone) |
+| label | string | `switchboard`, `careers`, `hr`, `info`, `contact`, or similar |
+| source_url | string | Page the value was read from |
+| source | string | `job_listing`, `website_contact`, `website_careers`, `website_leadership`, or `website_home` |
+| is_organizational | boolean | True for switchboards and generic inboxes (`hr@`, `careers@`) |
+| captured_at | datetime | When the row was written |
+
 ## decision_maker
 
 | Column | Type | Meaning |
 | --- | --- | --- |
 | id | integer | Primary key |
 | company_id | integer | Employer |
-| name | string | Person name (contact details redacted) |
+| name | string | Person name (emails/phones in this field are redacted) |
 | designation | string | Job title |
 | department | string | Optional department |
 | relevance_rank | integer | Partnership-control rank; 1 is best, 99 unmatched |
-| profile_url | string | Optional public profile URL entered by a person |
-| source | string | How the row was captured |
+| profile_url | string | Optional public profile URL |
+| email | string | Optional public email from a company page, CSV, or an Apollo disclose |
+| phone | string | Optional public phone from a company page or CSV |
+| source | string | How the row was captured (`manual`, `linkedin_people`, `website_leadership`, `apollo`) |
 | verified_by | string | Who confirmed the title |
 | verified_at | datetime | Set only when `verified_by` is present |
 | confidence | float | 0–1 optional confidence |
-| notes | text | Redacted notes; no email or phone columns exist |
+| notes | text | Notes; emails/phones in this field are redacted. Apollo search stores city/country here |
+| apollo_person_id | string | Unique Apollo person id used to disclose without searching again |
+| email_status | string | Apollo email availability before disclose (`verified`, `unavailable`, and similar) |
+| disclosed_at | datetime | When a paid Apollo email reveal was requested |
 
 ## lead_score
 

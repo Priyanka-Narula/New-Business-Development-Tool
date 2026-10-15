@@ -7,17 +7,26 @@ from collections.abc import Sequence
 
 import streamlit as st
 
+from aambridge.contacts.apollo import ApolloError, disclose_person, search_company_people
+from aambridge.dashboard.marketing import marketing_pack_zip, marketing_report_pdf
+from aambridge.dashboard.report import REPORT_NAME
 from aambridge.dashboard.queries import (
     OUTREACH_STATUSES,
+    ROLLING_DAYS,
+    EMPTY_SCAN_HINT,
     PipelineFilters,
     apply_pipeline_filters,
     company_detail,
     export_top50_csv,
     filter_options_from_rows,
     focus_snapshot,
-    industry_rankings,
+    latest_completed_scan,
     pipeline_rows,
-    region_rankings,
+    rolling_city_chart,
+    rolling_country_chart,
+    rolling_hiring,
+    rolling_industry_chart,
+    rolling_region_chart,
     set_outreach_status,
 )
 from aambridge.db.session import (
@@ -62,6 +71,25 @@ def _scored_rows(database_url: str) -> list[dict]:
     )
 
 
+@st.cache_data(ttl=180, show_spinner="Loading 30-day hiring from Neon...")
+def _rolling_jobs(database_url: str) -> list[dict]:
+    return rolling_hiring(
+        _sessions(database_url),
+        days=ROLLING_DAYS,
+        hide_agencies=False,
+    )
+
+
+@st.cache_data(ttl=180, show_spinner="Preparing marketing pack...")
+def _marketing_zip(database_url: str) -> bytes:
+    return marketing_pack_zip(_sessions(database_url), hide_agencies=True)
+
+
+@st.cache_data(ttl=180, show_spinner="Preparing PDF report...")
+def _marketing_pdf(database_url: str) -> bytes:
+    return marketing_report_pdf(_sessions(database_url), hide_agencies=True)
+
+
 def _cell(value: object) -> str:
     return str(value).replace("|", "/").replace("\n", " ")
 
@@ -100,18 +128,6 @@ def _multiselect(label: str, options: list[str]) -> tuple[str, ...]:
 
 def _filters(options: dict[str, list[str]]) -> PipelineFilters:
     st.sidebar.header("Filters")
-    preset = st.sidebar.selectbox(
-        "Saved view",
-        (
-            "All scored companies",
-            "Top approach list: UAE and Riyadh",
-            "Emiratisation: mainland UAE, 50+ staff, nationality-restricted",
-        ),
-    )
-    preset_key = {
-        "Top approach list: UAE and Riyadh": "uae_riyadh",
-        "Emiratisation: mainland UAE, 50+ staff, nationality-restricted": "emiratisation",
-    }.get(preset)
     hide_agencies = st.sidebar.checkbox("Hide agencies", value=True)
     score_min, score_max = st.sidebar.slider("Lead score", 0, 100, (0, 100))
     return PipelineFilters(
@@ -121,12 +137,10 @@ def _filters(options: dict[str, list[str]]) -> PipelineFilters:
         industries=_multiselect("Industry", options["industries"]),
         seniorities=_multiselect("Seniority", options["seniorities"]),
         hiring_bands=_multiselect("Hiring activity band", options["hiring_bands"]),
-        size_bands=_multiselect("Company size", options["size_bands"]),
         score_min=score_min,
         score_max=score_max,
         outreach_statuses=_multiselect("Outreach status", options["outreach_statuses"]),
         hide_agencies=hide_agencies,
-        preset=preset_key,
         acquisition_bands=_multiselect("Target tier", options["acquisition_bands"]),
     )
 
@@ -150,16 +164,26 @@ def _chart_styles() -> None:
 def _ranking_chart(items: list[dict], label_key: str, key_prefix: str) -> str | None:
     """Clickable ranking. Bar length is relative to the leader in this chart."""
 
-    if not items:
+    value_key = "job_count" if items and "job_count" in items[0] else "market_score"
+    visible = [
+        item
+        for item in items
+        if int(item.get(value_key) or 0) > 0
+    ]
+    if not visible:
         return None
+    items = visible
     _chart_styles()
-    top = max(int(item["market_score"]) for item in items) or 1
+    top = max(int(item[value_key]) for item in items) or 1
     clicked: str | None = None
     for index, item in enumerate(items, start=1):
         label = str(item[label_key])
-        score = int(item["market_score"])
-        width = round(100 * score / top)
-        mix = f"{item['high']} High · {item['medium']} Medium · {item['low']} Low"
+        score = int(item[value_key])
+        width = round(100 * score / top) if top else 0
+        if "job_count" in item:
+            mix = f"{item['job_count']} jobs · {item['company_count']} employers"
+        else:
+            mix = f"{item['high']} High · {item['medium']} Medium · {item['low']} Low"
         name_col, bar_col = st.columns([2, 5])
         if name_col.button(f"{index}. {label}", key=f"{key_prefix}-{index}-{label}"):
             clicked = label
@@ -171,6 +195,18 @@ def _ranking_chart(items: list[dict], label_key: str, key_prefix: str) -> str | 
         )
         st.caption(mix)
     return clicked
+
+
+def _last_scan_line(sessions) -> str:
+    scan = latest_completed_scan(sessions)
+    label = (scan or {}).get("label") or ""
+    if not label:
+        return "No completed scan yet"
+    return f"Last completed scan: {label}"
+
+
+def _empty_chart(sessions) -> None:
+    st.info(f"{_last_scan_line(sessions)}. {EMPTY_SCAN_HINT}")
 
 
 def _percentile_label(value: object) -> str:
@@ -208,6 +244,47 @@ def _company_brief(sessions, company_id: int) -> None:
         st.success(f"Saved outreach status: {status}")
         st.rerun()
 
+    if detail.get("website"):
+        st.markdown(f"**Website**  {detail['website']}")
+    st.markdown("**Public contacts**")
+    contacts = detail.get("public_contacts") or []
+    shown = [
+        item
+        for item in contacts
+        if item.get("kind") in {"phone", "email", "address", "page_url"}
+    ]
+    if not shown:
+        st.caption("No public company phone or email stored yet.")
+    for item in shown:
+        if item["kind"] == "page_url":
+            continue
+        st.markdown(
+            f"- **{item['kind']}** · {item['label'] or '—'} · {item['value']}"
+        )
+        if item.get("source_url"):
+            st.caption(item["source_url"])
+    people = detail.get("people") or []
+    st.markdown("**People**")
+    if not people:
+        st.caption("No named hiring contacts stored yet.")
+    for person in people:
+        verified = "verified" if person.get("verified") else "unverified"
+        extra = " · ".join(
+            part
+            for part in (person.get("email"), person.get("phone"))
+            if part
+        )
+        line = f"- {person['name']} · {person['designation']} · {verified}"
+        if extra:
+            line += f" · {extra}"
+        elif person.get("apollo_person_id") and not person.get("disclosed"):
+            status = person.get("email_status") or "unknown"
+            line += f" · {status} · locked"
+        st.markdown(line)
+        if person.get("profile_url"):
+            st.caption(person["profile_url"])
+    _apollo_brief(sessions, company_id, people)
+
     st.markdown("**Why this score**")
     if detail["missing_inputs"]:
         st.warning("Missing inputs: " + ", ".join(detail["missing_inputs"]))
@@ -231,6 +308,88 @@ def _company_brief(sessions, company_id: int) -> None:
             st.caption(item["source_url"])
 
 
+def _apollo_label(person: dict) -> str:
+    parts = [
+        person.get("name") or "Unknown",
+        person.get("designation") or "",
+        person.get("location") or "",
+        person.get("email_status") or "unknown",
+    ]
+    return " · ".join(part for part in parts if part)
+
+
+def _apollo_brief(sessions, company_id: int, people: list[dict]) -> None:
+    st.markdown("**Apollo contacts**")
+    flash_key = f"apollo-flash-{company_id}"
+    if st.session_state.get(flash_key):
+        kind, message = st.session_state.pop(flash_key)
+        getattr(st, kind)(message)
+    settings = Settings()
+    if not settings.has_apollo_api_key:
+        st.caption("Set APOLLO_API_KEY in .env to search Apollo and disclose emails.")
+        return
+    if st.button("Find Apollo people", key=f"apollo-search-{company_id}"):
+        try:
+            stats = search_company_people(sessions, company_id)
+            places = ", ".join(stats.get("locations") or []) or "no location filter"
+            st.session_state[flash_key] = (
+                "success",
+                f"Found {stats['found']} people for {stats['company']} "
+                f"({places}). Stored {stats['stored']}.",
+            )
+            st.rerun()
+        except (ApolloError, ValueError) as exc:
+            st.error(str(exc))
+            return
+    undisclosed = [
+        person
+        for person in people
+        if person.get("apollo_person_id") and not person.get("disclosed")
+    ]
+    if not undisclosed:
+        st.caption(
+            "Search uses company name and location. Emails stay locked until you disclose."
+        )
+        return
+    labels = [_apollo_label(person) for person in undisclosed]
+    chosen = st.selectbox(
+        "People available to disclose",
+        labels,
+        key=f"apollo-pick-{company_id}",
+    )
+    verify = st.checkbox(
+        "Also mark verified",
+        key=f"apollo-verify-{company_id}",
+    )
+    if st.button("Disclose selected", key=f"apollo-disclose-{company_id}"):
+        selected = undisclosed[labels.index(chosen)]
+        try:
+            result = disclose_person(
+                sessions,
+                int(selected["id"]),
+                verified_by="recruiter" if verify else "",
+            )
+            if result.get("skipped"):
+                st.session_state[flash_key] = (
+                    "info",
+                    "This contact was already disclosed.",
+                )
+            elif result.get("email"):
+                st.session_state[flash_key] = (
+                    "success",
+                    f"Disclosed email for {selected['name']}.",
+                )
+            else:
+                st.session_state[flash_key] = (
+                    "warning",
+                    f"Apollo returned no email for {selected['name']}. "
+                    "This person will not be charged again.",
+                )
+            st.rerun()
+        except (ApolloError, ValueError) as exc:
+            st.error(str(exc))
+
+
 def _toggle_company(company_id: int) -> None:
     current = st.session_state.get("expanded_company_id")
     st.session_state["expanded_company_id"] = (
@@ -244,7 +403,7 @@ def _company_list(sessions, rows: list[dict], key_prefix: str) -> None:
         return
     st.caption(
         "Target tier · percentile · lead score · industry · region · location · "
-        "hiring · contact · outreach"
+        "hiring · contact · phone · email · outreach"
     )
     expanded = st.session_state.get("expanded_company_id")
     for row in rows:
@@ -255,7 +414,9 @@ def _company_list(sessions, rows: list[dict], key_prefix: str) -> None:
             f"{row['lead_score']}  ·  {row['industry'] or '—'}  ·  "
             f"{row['region'] or '—'}  ·  {row['country_city'] or '—'}  ·  "
             f"{row['hiring_activity_label']}  ·  "
-            f"{row['key_contact'] or 'No contact'}  ·  {row['status']}"
+            f"{row['key_contact'] or 'No contact'}  ·  "
+            f"{row.get('company_phone') or '—'}  ·  "
+            f"{row.get('company_email') or '—'}  ·  {row['status']}"
         )
         if st.button(label, key=f"{key_prefix}-{company_id}"):
             _toggle_company(company_id)
@@ -271,6 +432,12 @@ def _companies_page(sessions, filters: PipelineFilters, rows: list[dict]) -> Non
         "Target tier compares each company with every scored company. "
         "Agencies stay hidden until the sidebar checkbox is cleared."
     )
+    fresh = [row for row in rows if row.get("new_requirement")]
+    if fresh:
+        st.subheader("New requirements this scan")
+        st.caption("Pick a company, then Find Apollo people to save names on Neon.")
+        _company_list(sessions, fresh, "companies-new")
+        st.subheader("All scored companies")
     _company_list(sessions, rows, "companies")
     if st.button("Prepare Top 50 CSV"):
         st.session_state["top50_csv"] = export_top50_csv(sessions, filters=filters)
@@ -289,7 +456,108 @@ def _open_industry(industry: str) -> None:
     st.session_state["market_region"] = None
 
 
-def _focus_page(sessions, rows: list[dict]) -> None:
+def _clear_focus_nav() -> None:
+    st.session_state["focus_country"] = None
+    st.session_state["focus_industry"] = None
+    st.session_state["focus_city"] = None
+
+
+def _focus_breadcrumbs(*, country: str | None = None, industry: str | None = None) -> None:
+    crumb_all, crumb_country, crumb_industry, _rest = st.columns([1, 1, 1, 2])
+    if crumb_all.button("All countries"):
+        _clear_focus_nav()
+        st.rerun()
+    if country and crumb_country.button(country):
+        st.session_state["focus_industry"] = None
+        st.session_state["focus_city"] = None
+        st.rerun()
+    if industry and crumb_industry.button(industry):
+        st.session_state["focus_city"] = None
+        st.rerun()
+
+
+def _apply_rolling_filters(facts: list[dict], filters: PipelineFilters) -> list[dict]:
+    matched = facts
+    if filters.hide_agencies:
+        matched = [item for item in matched if not item.get("is_agency")]
+    if filters.countries:
+        matched = [item for item in matched if item.get("country") in filters.countries]
+    if filters.regions:
+        matched = [item for item in matched if item.get("region") in filters.regions]
+    if filters.cities:
+        matched = [item for item in matched if item.get("city") in filters.cities]
+    if filters.industries:
+        matched = [item for item in matched if item.get("industry") in filters.industries]
+    return matched
+
+
+def _focus_geo(sessions, rows: list[dict], rolling: list[dict]) -> None:
+    country = st.session_state.get("focus_country")
+    industry = st.session_state.get("focus_industry")
+    city = st.session_state.get("focus_city")
+    caption = (
+        f"Unique jobs seen in the last {ROLLING_DAYS} days "
+        f"(all completed scans on Neon). {_last_scan_line(sessions)}"
+    )
+    if country and industry and city:
+        st.subheader(city)
+        st.caption(f"{industry} in {country}")
+        _focus_breadcrumbs(country=country, industry=industry)
+        scoped = [
+            row
+            for row in rows
+            if row.get("country") == country
+            and row.get("industry") == industry
+            and row.get("city") == city
+        ]
+        scoped.sort(key=lambda row: (-int(row["lead_score"]), row["company"]))
+        st.caption(f"{len(scoped)} companies, strongest lead score first.")
+        _company_list(sessions, scoped, f"focus-{country}-{industry}-{city}")
+        return
+    if country and industry:
+        st.subheader(industry)
+        st.caption(f"{caption} {country}, {industry}.")
+        _focus_breadcrumbs(country=country, industry=industry)
+        chart = rolling_city_chart(rolling, country=country, industry=industry)
+        clicked = _ranking_chart(
+            chart["rankings"], "city", f"focus-city-{country}-{industry}"
+        )
+        if clicked:
+            st.session_state["focus_city"] = clicked
+            st.rerun()
+        if not chart["rankings"]:
+            _empty_chart(sessions)
+        return
+    if country:
+        st.subheader(country)
+        st.caption(f"{caption} Ranked sectors in {country}.")
+        _focus_breadcrumbs(country=country)
+        scoped = [item for item in rolling if item.get("country") == country]
+        chart = rolling_industry_chart(scoped)
+        clicked = _ranking_chart(
+            chart["rankings"], "industry", f"focus-industry-{country}"
+        )
+        if clicked:
+            st.session_state["focus_industry"] = clicked
+            st.session_state["focus_city"] = None
+            st.rerun()
+        if not chart["rankings"]:
+            _empty_chart(sessions)
+        return
+    st.subheader("Countries")
+    st.caption(f"{caption} Pick a country, then a booming sector, then a city.")
+    chart = rolling_country_chart(rolling)
+    clicked = _ranking_chart(chart["rankings"], "country", "focus-country")
+    if clicked:
+        st.session_state["focus_country"] = clicked
+        st.session_state["focus_industry"] = None
+        st.session_state["focus_city"] = None
+        st.rerun()
+    if not chart["rankings"]:
+        _empty_chart(sessions)
+
+
+def _focus_page(sessions, rows: list[dict], rolling: list[dict]) -> None:
     st.title("Where to focus")
     snapshot = focus_snapshot(rows)
     leader = snapshot["leading_industry"]
@@ -298,11 +566,11 @@ def _focus_page(sessions, rows: list[dict]) -> None:
         st.markdown(
             f"**{uncontacted}** high-tier "
             f"{'company has' if uncontacted == 1 else 'companies have'} "
-            f"not been contacted yet. **{leader}** leads the market ranking "
-            f"with a score of {snapshot['leading_score']}."
+            f"not been contacted yet. **{leader}** leads the latest-scan "
+            f"outreach ranking with a score of {snapshot['leading_score']}."
         )
     else:
-        st.markdown("Score a scan to see which industry and companies to approach first.")
+        st.markdown(f"{_last_scan_line(sessions)}. {EMPTY_SCAN_HINT}")
     totals = snapshot["totals_by_band"]
     columns = st.columns(4)
     columns[0].metric("Uncontacted high", uncontacted)
@@ -310,14 +578,18 @@ def _focus_page(sessions, rows: list[dict]) -> None:
     columns[2].metric("Medium", totals["Medium"])
     columns[3].metric("Low", totals["Low"])
 
-    st.subheader("Strongest industries")
-    st.caption("Score = 3 × High + 1 × Medium. Low companies are counted but do not raise the rank.")
-    clicked = _ranking_chart(snapshot["top_industries"], "industry", "focus-industry")
-    if clicked:
-        _open_industry(clicked)
-        st.rerun()
-    if not snapshot["top_industries"]:
-        st.info("No industries match the current filters.")
+    _focus_geo(sessions, rows, rolling)
+
+    st.subheader("New requirements this scan")
+    st.caption(
+        "Employers with a newly seen job. Open a company and use Find Apollo people "
+        "when you want named outreach contacts."
+    )
+    newcomers = [row for row in rows if row.get("new_requirement")]
+    if newcomers:
+        _company_list(sessions, newcomers, "new-req")
+    else:
+        st.info("No newly seen jobs on the latest completed scan.")
 
     st.subheader("First calls")
     st.caption("High tier, still new or being researched, strongest percentile first.")
@@ -327,58 +599,61 @@ def _focus_page(sessions, rows: list[dict]) -> None:
         st.info("No high-tier companies are still uncontacted.")
 
 
-def _market_page(sessions, rows: list[dict]) -> None:
+def _market_page(sessions, rows: list[dict], rolling: list[dict]) -> None:
     industry = st.session_state.get("market_industry")
     region = st.session_state.get("market_region")
     if industry and region:
         _region_companies_page(sessions, rows, industry, region)
         return
     if industry:
-        _industry_regions_page(rows, industry)
+        _industry_regions_page(sessions, rolling, industry)
         return
 
     st.title("Market potential")
     st.caption(
-        "Industries ranked by target-tier mix: 3 × High + 1 × Medium. "
-        "Bar length is relative to the leading industry. "
-        "Sidebar filters choose which companies are counted. "
-        "They do not change who is High."
+        f"Unique jobs seen in the last {ROLLING_DAYS} days (all completed scans on Neon). "
+        f"{_last_scan_line(sessions)}"
     )
-    breakdown = industry_rankings(rows)
-    if breakdown["excluded"]:
-        st.caption(
-            f"{breakdown['excluded']} companies have no industry or no target tier "
-            "and are left out of this ranking."
-        )
+    pdf_col, pack_col, _rest = st.columns([1, 1, 2])
+    pdf_col.download_button(
+        "Download PDF report",
+        data=_marketing_pdf(_database_url()),
+        file_name=REPORT_NAME,
+        mime="application/pdf",
+        help="Charts for the weekly pulse, industries, locations, roles, seniority, and themes.",
+    )
+    pack_col.download_button(
+        "Download marketing pack",
+        data=_marketing_zip(_database_url()),
+        file_name="aambridge_marketing.zip",
+        mime="application/zip",
+        help="PDF briefing plus CSV tables. No people or contact details.",
+    )
+    breakdown = rolling_industry_chart(rolling)
     clicked = _ranking_chart(breakdown["rankings"], "industry", "market-industry")
     if clicked:
         _open_industry(clicked)
         st.rerun()
     if not breakdown["rankings"]:
-        st.info("No industries match the current filters.")
+        _empty_chart(sessions)
 
 
-def _industry_regions_page(rows: list[dict], industry: str) -> None:
+def _industry_regions_page(sessions, rolling: list[dict], industry: str) -> None:
     st.title(industry)
     if st.button("All industries"):
         st.session_state["market_industry"] = None
         st.session_state["market_region"] = None
         st.rerun()
     st.caption(
-        f"Regions in {industry}, ranked the same way: 3 × High + 1 × Medium."
+        f"Unique jobs in {industry} seen in the last {ROLLING_DAYS} days."
     )
-    breakdown = region_rankings(rows, industry)
-    if breakdown["excluded"]:
-        st.caption(
-            f"{breakdown['excluded']} companies in {industry} have no region "
-            "or no target tier and are left out of this ranking."
-        )
+    breakdown = rolling_region_chart(rolling, industry)
     clicked = _ranking_chart(breakdown["rankings"], "region", f"market-region-{industry}")
     if clicked:
         st.session_state["market_region"] = clicked
         st.rerun()
     if not breakdown["rankings"]:
-        st.info(f"No regions in {industry} match the current filters.")
+        _empty_chart(sessions)
 
 
 def _region_companies_page(
@@ -452,18 +727,21 @@ def main() -> None:
     if jump in PAGES:
         st.session_state["nav_page"] = jump
     page = st.sidebar.radio("Page", PAGES, key="nav_page")
+    if page != "Where to focus":
+        _clear_focus_nav()
     if page != "Market potential":
         st.session_state["market_industry"] = None
         st.session_state["market_region"] = None
     options = filter_options_from_rows(scored)
     filters = _filters(options)
     rows = apply_pipeline_filters(scored, filters)
+    rolling = _apply_rolling_filters(_rolling_jobs(_database_url()), filters)
     if page == "Where to focus":
-        _focus_page(sessions, rows)
+        _focus_page(sessions, rows, rolling)
     elif page == "Companies":
         _companies_page(sessions, filters, rows)
     elif page == "Market potential":
-        _market_page(sessions, rows)
+        _market_page(sessions, rows, rolling)
     else:
         _changes_page(sessions, scored)
 

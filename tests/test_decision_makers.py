@@ -191,8 +191,8 @@ def test_csv_import_drops_forbidden_columns_and_redacts_notes(tmp_path) -> None:
     assert stored["designation"] == "Head of TA"
     assert stored["relevance_rank"] == 5
     assert stored["verified_at"] is None
-    assert "email" not in stored
-    assert "phone" not in stored
+    assert stored["email"] == "sara@example.com"
+    assert stored["phone"] == "+971 50 123 4567"
     assert "sara@example.com" not in (stored["notes"] or "")
     assert "+971 50 123 4567" not in (stored["notes"] or "")
     assert "[email redacted]" in (stored["notes"] or "")
@@ -201,23 +201,19 @@ def test_csv_import_drops_forbidden_columns_and_redacts_notes(tmp_path) -> None:
     with sessions() as session:
         record = session.scalar(select(DecisionMaker))
         assert record is not None
-        payload = {
-            column.name: getattr(record, column.name)
-            for column in inspect(DecisionMaker).columns
-        }
-        dumped = " ".join(str(value) for value in payload.values())
-        assert "sara@example.com" not in dumped
-        assert "+971 50 123 4567" not in dumped
+        assert record.email == "sara@example.com"
+        assert record.phone == "+971 50 123 4567"
+        assert record.notes is not None
+        assert "sara@example.com" not in record.notes
 
 
-def test_decision_maker_schema_has_no_personal_contact_columns() -> None:
+def test_decision_maker_schema_has_optional_contact_columns() -> None:
     columns = {column.name for column in inspect(DecisionMaker).columns}
+    assert {"email", "phone", "apollo_person_id", "email_status", "disclosed_at"} <= columns
     assert columns.isdisjoint(
         {
-            "email",
             "contact_email",
             "recruiter_email",
-            "phone",
             "phone_number",
             "mobile",
             "telephone",
@@ -244,6 +240,28 @@ def test_add_decision_maker_redacts_contact_details_in_text_fields(tmp_path) -> 
         assert "sara@example.com" not in record.name
         assert record.notes is not None
         assert "+971 50 123 4567" not in record.notes
+
+
+def test_add_decision_maker_stores_public_email_and_phone(tmp_path) -> None:
+    _engine, sessions = _database(tmp_path)
+    with sessions.begin() as session:
+        company_id = _company(session, "Client Hospital").id
+
+    record_id = add_decision_maker(
+        sessions,
+        company_id=company_id,
+        name="Sara Khan",
+        designation="Head of TA",
+        source="website_leadership",
+        email="sara@example.com",
+        phone="+971 50 123 4567",
+    )
+    with sessions() as session:
+        record = session.get(DecisionMaker, record_id)
+        assert record is not None
+        assert record.email == "sara@example.com"
+        assert record.phone == "+971 50 123 4567"
+        assert record.verified_at is None
 
 
 def test_verified_rank_is_used_by_scoring(tmp_path) -> None:
@@ -352,5 +370,6 @@ def test_cli_lists_tasks_without_contact_fields(tmp_path) -> None:
     assert [item["name"] for item in rows] == ["Aisha Rahman"]
     assert rows[0]["designation"] == "CHRO"
     assert rows[0]["verified_at"] is not None
-    assert all("email" not in item and "phone" not in item for item in rows)
+    assert rows[0]["email"] is None
+    assert rows[0]["phone"] is None
     assert missing_contact_tasks(sessions) == []

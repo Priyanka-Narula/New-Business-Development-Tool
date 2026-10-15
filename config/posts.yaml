@@ -1,3 +1,5 @@
+# Phrase match only. Anything else is post_category `other` (unclassified).
+# Expansion/award scoring needs --query-set expansion or --query-set all.
 categories:
   project_award:
     - "awarded the contract"
@@ -13,6 +15,10 @@ categories:
     - "RHQ"
     - "launching in Riyadh"
     - "new hospital"
+    - "new school"
+    - "new campus"
+    - "new data center"
+    - "new data centre"
     - "new branch"
     - "we are expanding"
     - "expanding into"
@@ -45,6 +51,10 @@ expansion_search_terms:
   - "regional headquarters"
   - "RHQ"
   - "new hospital"
+  - "new school"
+  - "new campus"
+  - "new data center"
+  - "new data centre"
   - "new branch"
   - "awarded the contract"
   - "we are expanding"

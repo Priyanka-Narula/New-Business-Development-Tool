@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from aambridge.db.models import (
     Company,
@@ -26,7 +26,6 @@ from aambridge.scoring.factors import (
     CompanyScoreContext,
     FactorResult,
     aambridge_fit,
-    company_potential,
     decision_maker_accessibility,
     external_agency_potential,
     hiring_activity,
@@ -39,7 +38,6 @@ FACTOR_FUNCTIONS = {
     "hiring_activity": hiring_activity,
     "industry_opportunity": industry_opportunity,
     "seniority_match": seniority_match,
-    "company_potential": company_potential,
     "aambridge_fit": aambridge_fit,
     "external_agency_potential": external_agency_potential,
     "decision_maker_accessibility": decision_maker_accessibility,
@@ -47,6 +45,7 @@ FACTOR_FUNCTIONS = {
 INDUSTRY_ALIASES = {
     "green_energy": "renewable_energy",
     "hospitality": "hospitality_tourism",
+    "ai": "ai_data",
 }
 
 
@@ -118,12 +117,27 @@ def _market_input(country: str, industry: str) -> tuple[float | None, str]:
     )
 
 
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+
+def _active_job_cutoff() -> datetime:
+    days = int(load_yaml("config/scoring.yaml").get("active_job_days") or 30)
+    return datetime.now(UTC) - timedelta(days=days)
+
+
 def build_context(
     session: Session,
     company: Company,
     scan_run_id: int,
 ) -> CompanyScoreContext:
-    jobs = list(session.scalars(select(Job).where(Job.company_id == company.id)))
+    jobs = list(
+        session.scalars(
+            select(Job)
+            .where(Job.company_id == company.id)
+            .options(selectinload(Job.observations))
+        )
+    )
     target_levels = target_seniority_keys()
     target_jobs = 0
     senior_jobs = 0
@@ -138,18 +152,17 @@ def build_context(
     countries: list[str] = []
     evidence_ids: set[int] = set()
     active_jobs = 0
+    cutoff = _active_job_cutoff()
 
     for job in jobs:
-        observation = next(
-            (
-                item
-                for item in job.observations
-                if item.scan_run_id == scan_run_id
-            ),
-            None,
-        )
-        if observation is None:
+        windowed = [
+            item
+            for item in job.observations
+            if _aware(item.observed_at) >= cutoff
+        ]
+        if not windowed:
             continue
+        observation = max(windowed, key=lambda item: _aware(item.observed_at))
         active_jobs += 1
         if len(job.observations) == 1:
             new_jobs += 1
@@ -178,7 +191,6 @@ def build_context(
             countries.append(job.country)
         source = session.scalar(
             select(SourceRecord).where(
-                SourceRecord.scan_run_id == scan_run_id,
                 SourceRecord.source == "linkedin_job",
                 SourceRecord.source_key == job.source_key,
             )
@@ -231,8 +243,6 @@ def build_context(
         industry=industry,
         industry_opportunity=opportunity,
         market_source_note=source_note,
-        size_band=company.size_band or "",
-        has_group=company.group_id is not None,
         functions=frozenset(functions),
         capability_industries=frozenset(capabilities["industries"]),
         capability_functions=frozenset(capabilities["functions"]),

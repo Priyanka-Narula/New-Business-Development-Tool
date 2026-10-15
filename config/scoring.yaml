@@ -5,11 +5,13 @@ signals:
   slowdown_min_percent: 40
   repeated_vacancy_days: 30
 
+# Jobs observed in this many days count as active when scoring a company.
+active_job_days: 30
+
 weights:
-  hiring_activity: 25
+  hiring_activity: 35
   industry_opportunity: 20
   seniority_match: 15
-  company_potential: 10
   aambridge_fit: 15
   external_agency_potential: 10
   decision_maker_accessibility: 5
@@ -25,7 +27,7 @@ priority:
   high_min_hiring_activity: 60
   high_min_seniority_match: 50
   high_min_agency_potential: 40
-  require_decision_maker_for_high: true
+  require_decision_maker_for_high: false
 
 entity_resolution:
   fuzzy_auto_accept: 92
@@ -40,6 +42,10 @@ aambridge_capabilities:
     - construction_infrastructure
     - banking_financial_services
     - hospitality_tourism
+    - education
+    - datacenters
+    - ai_data
+    - renewable_energy
   functions:
     - hr_talent
     - finance
@@ -49,3 +55,7 @@ aambridge_capabilities:
     - project_management
     - hospitality_ops
     - retail_ops
+    - education_ops
+    - datacenter_ops
+    - it_tech
+    - electrical_design

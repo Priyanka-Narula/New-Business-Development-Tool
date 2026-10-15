@@ -44,17 +44,36 @@ def manual_login(driver: webdriver.Chrome) -> None:
     _finish_login_manually(driver, "Sign in to LinkedIn in the opened Chrome window.")
 
 
-def _finish_login_manually(driver: webdriver.Chrome, message: str) -> None:
+def _finish_login_manually(
+    driver: webdriver.Chrome,
+    message: str,
+    timeout_seconds: int = 900,
+) -> None:
     if message:
         log.info(message)
     log.info("Complete any verification yourself; this scraper does not bypass it.")
-    input("When the LinkedIn feed is accessible, press Enter here to continue: ")
-    current = driver.current_url.lower()
-    if "login" in current or "checkpoint" in current or "authwall" in current:
-        raise RuntimeError(
-            "LinkedIn still appears to be on a login/checkpoint page. "
-            "Complete it and run the command again."
-        )
+    log.info(
+        "Sign in in the opened Chrome window. Waiting up to %s seconds for a LinkedIn session.",
+        timeout_seconds,
+    )
+    deadline = time.time() + timeout_seconds
+    last_log = 0.0
+    while time.time() < deadline:
+        if _is_authenticated_page(driver):
+            log.info("LinkedIn session is ready.")
+            return
+        now = time.time()
+        if now - last_log >= 15:
+            log.info(
+                "Waiting for LinkedIn login or verification. Current page: %s",
+                driver.current_url,
+            )
+            last_log = now
+        time.sleep(2)
+    raise RuntimeError(
+        "Timed out waiting for a LinkedIn session. "
+        "Sign in in the Chrome window and run the command again."
+    )
 
 
 def _first_element(driver: webdriver.Chrome, locators: tuple[tuple[str, str], ...]):

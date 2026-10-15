@@ -1,4 +1,4 @@
-"""Manual, assisted decision-maker capture. No emails or phone numbers."""
+"""Hiring-contact capture. Public email/phone are optional; names stay redacted."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from aambridge.db.models import Company, CompanyAlias, DecisionMaker, LeadScore
 from aambridge.extract.taxonomies import load_yaml
-from aambridge.privacy import privacy_safe, redact_personal_contacts
+from aambridge.privacy import redact_personal_contacts
 from aambridge.resolve.companies import normalise_company_name
 from aambridge.signals.detect import _scan_ids
 
@@ -26,19 +26,19 @@ ALLOWED_COLUMNS = {
     "designation",
     "department",
     "profile_url",
+    "email",
+    "phone",
     "source",
     "verified_by",
     "confidence",
     "notes",
 }
-FORBIDDEN_COLUMNS = {
-    "email",
-    "contact_email",
-    "recruiter_email",
-    "phone",
-    "phone_number",
-    "mobile",
-    "telephone",
+CONTACT_COLUMN_ALIASES = {
+    "contact_email": "email",
+    "recruiter_email": "email",
+    "phone_number": "phone",
+    "mobile": "phone",
+    "telephone": "phone",
 }
 
 
@@ -132,17 +132,26 @@ def add_decision_maker(
     source: str,
     department: str = "",
     profile_url: str = "",
+    email: str = "",
+    phone: str = "",
     verified_by: str = "",
     confidence: float | None = None,
     notes: str = "",
+    apollo_person_id: str = "",
+    email_status: str = "",
+    disclosed_at: datetime | None = None,
 ) -> int:
     safe_name = redact_personal_contacts(name).strip()
     safe_designation = redact_personal_contacts(designation).strip()
     safe_source = redact_personal_contacts(source).strip()
     safe_department = redact_personal_contacts(department).strip()
     safe_profile_url = redact_personal_contacts(profile_url).strip()
+    safe_email = (email or "").strip()
+    safe_phone = (phone or "").strip()
     safe_verified_by = redact_personal_contacts(verified_by).strip()
     safe_notes = redact_personal_contacts(notes).strip()
+    safe_apollo_id = (apollo_person_id or "").strip() or None
+    safe_email_status = (email_status or "").strip() or None
     if not safe_name or not safe_designation or not safe_source:
         raise ValueError("name, designation, and source are required")
     if confidence is not None and not 0 <= confidence <= 1:
@@ -152,36 +161,70 @@ def add_decision_maker(
         company = session.get(Company, company_id)
         if company is None:
             raise ValueError(f"Company {company_id} not found")
-        existing = session.scalar(
-            select(DecisionMaker).where(
-                DecisionMaker.company_id == company_id,
-                DecisionMaker.name == safe_name,
-                DecisionMaker.designation == safe_designation,
+        existing = None
+        if safe_apollo_id:
+            existing = session.scalar(
+                select(DecisionMaker).where(
+                    DecisionMaker.apollo_person_id == safe_apollo_id
+                )
             )
-        )
+        if existing is None:
+            existing = session.scalar(
+                select(DecisionMaker).where(
+                    DecisionMaker.company_id == company_id,
+                    DecisionMaker.name == safe_name,
+                    DecisionMaker.designation == safe_designation,
+                )
+            )
         now = datetime.now(UTC) if safe_verified_by else None
-        values = {
-            "department": safe_department or None,
-            "relevance_rank": rank_designation(safe_designation),
-            "profile_url": safe_profile_url or None,
-            "source": safe_source,
-            "verified_by": safe_verified_by or None,
-            "verified_at": now,
-            "confidence": confidence,
-            "notes": safe_notes or None,
-        }
         if existing is None:
             record = DecisionMaker(
                 company_id=company_id,
                 name=safe_name,
                 designation=safe_designation,
-                **values,
+                department=safe_department or None,
+                relevance_rank=rank_designation(safe_designation),
+                profile_url=safe_profile_url or None,
+                email=safe_email or None,
+                phone=safe_phone or None,
+                source=safe_source,
+                verified_by=safe_verified_by or None,
+                verified_at=now,
+                confidence=confidence,
+                notes=safe_notes or None,
+                apollo_person_id=safe_apollo_id,
+                email_status=safe_email_status,
+                disclosed_at=disclosed_at,
             )
             session.add(record)
             session.flush()
             return record.id
-        for key, value in values.items():
-            setattr(existing, key, value)
+        existing.name = safe_name
+        existing.designation = safe_designation
+        existing.relevance_rank = rank_designation(safe_designation)
+        if safe_department:
+            existing.department = safe_department
+        if safe_profile_url:
+            existing.profile_url = safe_profile_url
+        if safe_email:
+            existing.email = safe_email
+        if safe_phone:
+            existing.phone = safe_phone
+        if not existing.source:
+            existing.source = safe_source
+        if safe_verified_by:
+            existing.verified_by = safe_verified_by
+            existing.verified_at = now
+        if confidence is not None:
+            existing.confidence = confidence
+        if safe_notes and not existing.notes:
+            existing.notes = safe_notes
+        if safe_apollo_id:
+            existing.apollo_person_id = safe_apollo_id
+        if safe_email_status:
+            existing.email_status = safe_email_status
+        if disclosed_at is not None:
+            existing.disclosed_at = disclosed_at
         return existing.id
 
 
@@ -203,24 +246,19 @@ def import_decision_makers(
 ) -> dict[str, int]:
     with path.open(encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
-        fieldnames = [name or "" for name in (reader.fieldnames or [])]
-        forbidden = [
-            name for name in fieldnames if name.casefold() in FORBIDDEN_COLUMNS
-        ]
-        if forbidden:
-            log.warning(
-                "Ignoring personal-contact columns in %s: %s",
-                path,
-                ", ".join(forbidden),
-            )
         rows = list(reader)
 
     stats = {"imported": 0, "skipped": 0}
     for row in rows:
+        mapped: dict[str, Any] = {}
+        for key, value in row.items():
+            alias = CONTACT_COLUMN_ALIASES.get((key or "").casefold(), key)
+            if (alias or "").casefold() in ALLOWED_COLUMNS:
+                mapped[alias.casefold() if alias.casefold() in ALLOWED_COLUMNS else alias] = value
         safe_row = {
             key: value
-            for key, value in privacy_safe(row).items()
-            if key.casefold() in ALLOWED_COLUMNS
+            for key, value in mapped.items()
+            if str(key).casefold() in ALLOWED_COLUMNS
         }
         try:
             with session_factory() as lookup:
@@ -237,6 +275,8 @@ def import_decision_makers(
                 source=str(safe_row.get("source") or "manual"),
                 department=str(safe_row.get("department") or ""),
                 profile_url=str(safe_row.get("profile_url") or ""),
+                email=str(safe_row.get("email") or ""),
+                phone=str(safe_row.get("phone") or ""),
                 verified_by=str(safe_row.get("verified_by") or ""),
                 confidence=float(confidence) if confidence not in {None, ""} else None,
                 notes=str(safe_row.get("notes") or ""),
@@ -272,6 +312,8 @@ def list_decision_makers(
                     "department": item.department,
                     "relevance_rank": item.relevance_rank,
                     "profile_url": item.profile_url,
+                    "email": item.email,
+                    "phone": item.phone,
                     "source": item.source,
                     "verified_by": item.verified_by,
                     "verified_at": (
@@ -279,6 +321,11 @@ def list_decision_makers(
                     ),
                     "confidence": item.confidence,
                     "notes": item.notes,
+                    "apollo_person_id": item.apollo_person_id,
+                    "email_status": item.email_status,
+                    "disclosed_at": (
+                        item.disclosed_at.isoformat() if item.disclosed_at else None
+                    ),
                 }
             )
         return rows
